@@ -74,7 +74,7 @@ export default function Backups({ api, notify }) {
       <p className="panel-desc">
         包含全部空间的资料、知识、对话和参考记录。保存在本机，不复制模型配置与访问令牌文件。
       </p>
-      <button className="secondary" disabled={running} onClick={() => start('create')}>
+      <button className="secondary" disabled={running || !data} onClick={() => start('create')}>
         {running && <Loader2 size={14} className="spin" />}创建本机备份
       </button>
       {error && (
@@ -121,7 +121,7 @@ export default function Backups({ api, notify }) {
         </div>
       )}
       <div className="backup-list">
-        {data?.items.map((item) => (
+        {data?.items?.map((item) => (
           <article key={item.id}>
             <strong>{new Date(item.createdAt).toLocaleString('zh-CN')}</strong>
             <small>
@@ -148,7 +148,7 @@ export default function Backups({ api, notify }) {
           </article>
         ))}
       </div>
-      {data && !data.items.length && <p className="form-note">尚无完成的备份。</p>}
+      {data && !data.items?.length && <p className="form-note">尚无完成的备份。</p>}
       {data?.total > 20 && (
         <p className="form-note">显示最近 20 份，共 {data.total} 份。更早的备份仍在本机目录。</p>
       )}
