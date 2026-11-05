@@ -1,0 +1,18 @@
+:root {
+  --canvas: #0e1422;
+  --sidebar: #101624;
+  --surface: #151d2d;
+  --text: #e0e3ef;
+  --muted: #8996b0;
+  --accent: #c5b9ed;
+  --line: #aab7d214;
+  --line-strong: #aab7d226;
+  --hover: #b6abd914;
+  --font:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --serif: 'Songti SC', 'STSong', Georgia, serif;
+  --radius-control: 7px;
+  --radius-panel: 11px;
+  --shadow-float: 0 20px 70px #0007;
+  --duration: 160ms;
+}

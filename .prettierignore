@@ -1,0 +1,7 @@
+node_modules
+dist
+.local
+vendor
+LICENSE
+design/evidence
+package-lock.json

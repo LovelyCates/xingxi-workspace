@@ -1,0 +1,7 @@
+星汐 Xingxi includes adapted star projection and glow rendering code from:
+https://github.com/Yuuyuko-uu/dsh-xingxi
+Copyright (c) 2026 Yuuyuko-uu. Yuuyuko-uu 插件许可 1.1.
+See LICENSE and vendor/XINGXI-LICENSE, retained unmodified.
+Adaptations are identified in src/star-renderer.js. The independent service,
+data model, two-space workflow, React interface, and MCP adapter were added
+for Xingxi. This distribution remains under the upstream license.
