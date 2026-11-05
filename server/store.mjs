@@ -5,6 +5,7 @@ import { dirname } from 'node:path';
 import { searchTerms } from './search.mjs';
 import { ConversationMemory } from './conversation-memory.mjs';
 import { WorkspaceViews } from './workspace-views.mjs';
+import { ReplyEvidence } from './reply-evidence.mjs';
 
 export class Fault extends Error {
   constructor(message, status = 400) {
@@ -58,6 +59,7 @@ export class Store {
     }
     this.conversations = new ConversationMemory(this);
     this.views = new WorkspaceViews(this);
+    this.replyEvidence = new ReplyEvidence(this);
   }
   indexEntry(entry) {
     this.views?.index(entry);

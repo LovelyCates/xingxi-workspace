@@ -129,6 +129,56 @@ async function bench(StoreClass, name) {
     data.conversationRecallCommon = measure(() => store.conversationContext(space.id, '合成消息'));
     data.conversationRecallRecent = measure(() => store.conversationContext(space.id, ''));
     data.conversationResponseBytes = Buffer.byteLength(JSON.stringify(recall));
+    if (process.argv.includes('--evidence')) {
+      const pagesBefore = store.db.prepare('PRAGMA page_count').get().page_count;
+      const pageSize = store.db.prepare('PRAGMA page_size').get().page_size;
+      const knowledge = entries.slice(0, 8).map((e) => ({
+        id: e.id,
+        revision: e.revision,
+        title: e.title,
+        body: e.body.slice(0, 1600),
+        sources: [{ sourceId: source.id, quote: 'Synthetic evidence', origin: 'benchmark' }],
+      }));
+      const conversation = Array.from({ length: 8 }, (_, i) => ({
+        id: `m${i * 2}`,
+        session_id: s.id,
+        session_title: 'Synthetic benchmark',
+        quote: '合成消息。'.repeat(25),
+        role: 'user',
+        created_at: stamp,
+      }));
+      const recent = Array.from({ length: 20 }, (_, i) => ({
+        id: `m${i}`,
+        role: i % 2 ? 'assistant' : 'user',
+        created_at: stamp,
+      }));
+      const input = { model: 'benchmark-no-network', knowledge, conversation, recent };
+      store.transaction(() => {
+        for (let i = 1; i < totals.messages; i += 2)
+          store.replyEvidence.save(space.id, s.id, `m${i}`, input);
+      });
+      const readEvidence = () => store.replyEvidence.read(space.id, s.id, 'm9999');
+      const sample = readEvidence();
+      if (sample.items.length !== 36) throw new Error('Evidence benchmark correctness failed');
+      data.replyEvidence = {
+        records: totals.messages / 2,
+        itemsPerRecord: 36,
+        databasePageGrowthBytes:
+          (store.db.prepare('PRAGMA page_count').get().page_count - pagesBefore) * pageSize,
+        readAndSerialize: measure(() => JSON.stringify(readEvidence())),
+        bytes: Buffer.byteLength(JSON.stringify(sample)),
+        saveWithReply: measure(() =>
+          store.transaction(() => {
+            const reply = store.append(space.id, s.id, {
+              role: 'assistant',
+              body: '合成回复',
+              clientId: `audit-${performance.now()}`,
+            });
+            store.replyEvidence.save(space.id, s.id, reply.id, input);
+          }),
+        ),
+      };
+    }
   }
   store.close();
   return data;

@@ -17,7 +17,7 @@ flowchart LR
 
 `spaces.kind` 为 work / companion。所有源、条目、关系和会话均显式指定 space_id。接口解析空间后，每次对象查询仍检查其空间归属，禁止通过另一空间 ID 引用对象。跨空间引用在写入时也被拒绝。
 
-数据表：spaces、sources、entries、revisions、relations、sessions、messages、jobs、entry_terms、migrations、space_memory、session_memory、session_bindings，以及 FTS5 conversation_search、catalog_search、稳定目录映射 catalog_docs 和来源字数缓存 source_metrics。外键开启，WAL 日志模式。每次条目编辑传入 revision；版本不符返回 409。更新前将旧条目写入 revisions，同一事务提交。
+数据表：spaces、sources、entries、revisions、relations、sessions、messages、jobs、entry_terms、migrations、space_memory、session_memory、session_bindings，以及 FTS5 conversation_search、catalog_search、稳定目录映射 catalog_docs 、来源字数缓存 source_metrics 及回答参考表 reply_evidence / reply_evidence_items。外键开启，WAL 日志模式。每次条目编辑传入 revision；版本不符返回 409。更新前将旧条目写入 revisions，同一事务提交。
 
 来源的正文不可通过服务 API 修改。记忆包含一组 `{sourceId, quote}`，每个 quote 必须是同空间来源原文的连续子串。候选状态 pending，经界面确认成为 accepted；归档为 archived。context_get 只检索 accepted。出处匹配检查提供可追溯性，不能替代对总结正确性的审核。
 
@@ -40,6 +40,14 @@ chat_reply 先检查 Key 和会话，再保存用户消息，生成回答后写�
 聊天全文索引仅对用户原话做中文单字/双字和英文分词，在消息写入的同一事务更新。查询通过空间专用 token 在 FTS5 内限定作用域，再以数据库归属复核；最多检索 6 条相关原话和 2 条近期原话，排除已经在当前窗口里的消息，单条原文摘录不超过 1,200 字符。没有后台模型摘要调用。会话/空间开关在查询时生效，删除消息的触发器同步清理索引。首次升级在事务中回填已有用户消息，migrations 标记避免重复回填。
 
 `session_open` 用 `(space_id,binding)` 唯一约束恢复会话，绑定和新会话创建在同一事务。删除会话会清除关联绑定；已有手动资料快照保留。模型回复期间拒绝删除会话。`session_list` 采用 rowid 游标每页最多 100 条。
+
+## 回答参考记录
+
+Service 在模型调用前截取实际输入：最多 8 条知识的标题、版本、1,600 字符正文及每出处 500 字符摘录，最多 8 条 1,200 字符历史用户原话，实际进入字符预算的最多 20 条近期消息标识/角色/时间。模型成功后，回答与这些记录在同一事务提交；失败不伪造参考记录，重试读取已经保存的记录，不再调用模型。
+
+网页在点击「本轮参考」时调用 `GET /api/spaces/:sid/sessions/:sessionId/messages/:messageId/evidence`；MCP `chat_evidence` 使用同一接口。接口校验空间、会话和消息归属，不把全部参考内容混入会话列表。旧消息与 session_append 的外部消息没有当时生成信息，返回 recorded=false。
+
+知识展示当时的有限快照，并标记已更新或归档；近期上下文仅记录标识，不复制全文。原会话删除通过数据库触发器将其他参考项 payload 清空，删除回答则外键级联移除其整份记录。保存时再次查验目标存在，避免模型生成过程中删除的原话被写回。关闭空间/会话召回后，读取时隐藏相关原话；这些审计数据永不进入记忆检索。已经输出的回答、手工资料和备份不因原会话删除而自动改写。
 
 ## 按需页面与目录全文索引
 
@@ -74,4 +82,5 @@ chat_reply 先检查 Key 和会话，再保存用户消息，生成回答后写�
 - 已完成：网页使用按页面摘要与分页接口，完整正文只在点击时读取；兼容完整快照仅保留作旧接口、诊断和导出使用。
 - 长会话的主题与助手方案仍缺乏有出处的滚动摘要；现有自动记忆为用户原话召回，不能代替全历史理解。
 - 记忆冲突、时间变更和用户纠正需要可审阅的统一管理；当前仅保留原话时间并提示模型优先当前纠正。
-- 持久化每轮引用证据与更完整的备份/恢复体验，以及针对上述变化的性能、外发边界和真实模型回归。
+- 已完成：每轮参考记录持久化，Web/MCP 同源读取，删除传播与有界读取；通过重启、回滚、真实模型及 5,000 份记录性能验收。
+- 尚待完善：备份/恢复体验，以及长摘要和冲突审阅变化后的性能、外发边界与真实模型回归。

@@ -195,6 +195,13 @@ tool(
   (a) => request(`${spacePath(a)}/sessions/${a.sessionId}/messages`, 'POST', a),
 );
 tool(
+  'chat_evidence',
+  '按助手消息 ID 读取当时提供给模型的参考记录，不调用模型。记录用于核对而非新记忆；旧消息可能没有记录。遵守空间隔离和原话关闭/删除状态，不能据此断言模型实际引用了每一项。',
+  { ...session, messageId: id },
+  (a) => request(`${spacePath(a)}/sessions/${a.sessionId}/messages/${a.messageId}/evidence`),
+  true,
+);
+tool(
   'chat_reply',
   '调用星汐 DeepSeek 伙伴回答，自动检索本空间记忆并保存用户消息和回答。复用 sessionId 和重试 clientId；会产生模型调用费用。',
   { ...session, body: z.string().min(1).max(12000), clientId: z.string().min(1).max(150) },

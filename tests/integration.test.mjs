@@ -8,6 +8,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { get, request as httpRequest, createServer as createHttpServer } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { Store } from '../server/store.mjs';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 test('真实 HTTP 与 stdio MCP：认证、跨站拒绝、命名空间、入库及会话连续性', async (t) => {
@@ -159,6 +160,62 @@ test('真实 HTTP 与 stdio MCP：认证、跨站拒绝、命名空间、入库�
     clientId: 'test-1',
   });
   assert.equal((await call('session_read', { spaceId: a.id, sessionId: s.id })).messages.length, 1);
+  const evidenceTool = list.tools.find((x) => x.name === 'chat_evidence');
+  assert.equal(evidenceTool.annotations.readOnlyHint, true);
+  const manualReply = await call('session_append', {
+    spaceId: a.id,
+    sessionId: s.id,
+    role: 'assistant',
+    body: '这是集成测试写入的虚构回复，不是模型回答。',
+    clientId: 'fixture-reply',
+  });
+  assert.equal(
+    (await call('chat_evidence', { spaceId: a.id, sessionId: s.id, messageId: manualReply.id }))
+      .recorded,
+    false,
+  );
+  // A deterministic fixture supplies stored audit data; no cloud model is called.
+  const fixtureStore = new Store(join(dir, 'xingxi.sqlite'));
+  try {
+    const firstMessage = fixtureStore.session(a.id, s.id).messages[0];
+    fixtureStore.replyEvidence.save(a.id, s.id, manualReply.id, {
+      model: 'fixture-only',
+      knowledge: [],
+      conversation: [],
+      recent: [
+        { id: firstMessage.id, role: firstMessage.role, created_at: firstMessage.created_at },
+      ],
+    });
+  } finally {
+    fixtureStore.close();
+  }
+  const mcpEvidence = await call('chat_evidence', {
+    spaceId: a.id,
+    sessionId: s.id,
+    messageId: manualReply.id,
+  });
+  const browserEvidence = await (
+    await fetch(`${base}/api/spaces/${a.id}/sessions/${s.id}/messages/${manualReply.id}/evidence`, {
+      headers,
+    })
+  ).json();
+  assert.deepEqual(mcpEvidence, browserEvidence);
+  assert.equal(mcpEvidence.recorded, true);
+  assert.equal(mcpEvidence.items.length, 1);
+  assert.equal(
+    (await call('chat_evidence', { spaceId: b.id, sessionId: s.id, messageId: manualReply.id }))
+      .isError,
+    true,
+  );
+  assert.equal(
+    (
+      await fetch(
+        `${base}/api/spaces/${b.id}/sessions/${s.id}/messages/${manualReply.id}/evidence`,
+        { headers },
+      )
+    ).status,
+    404,
+  );
   const missingKey = await call('chat_reply', {
     spaceId: a.id,
     sessionId: s.id,

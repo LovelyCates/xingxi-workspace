@@ -146,6 +146,13 @@ const server = createServer(async (req, res) => {
           return json(res, store.updateSession(sid, id, b));
         if (parts.length === 2 && method === 'DELETE')
           return json(res, service.deleteSession(sid, id));
+        if (
+          parts.length === 5 &&
+          parts[2] === 'messages' &&
+          parts[4] === 'evidence' &&
+          method === 'GET'
+        )
+          return json(res, store.replyEvidence.read(sid, id, parts[3]));
         if (parts[2] === 'source' && method === 'POST')
           return json(res, store.sessionSource(sid, id), 201);
         if (parts[2] === 'reply' && method === 'POST')

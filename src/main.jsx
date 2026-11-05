@@ -1619,6 +1619,113 @@ function Workshop({
   );
 }
 
+function ReplyEvidenceView({ sid, sessionId, messageId, onClose, onConversation, canNavigate }) {
+  const [data, setData] = useState(null),
+    [error, setError] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    setData(null);
+    setError('');
+    api(`/spaces/${sid}/sessions/${sessionId}/messages/${messageId}/evidence`)
+      .then((result) => {
+        if (!cancelled) setData(result);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sid, sessionId, messageId]);
+  const recalled = data?.items.filter((item) => item.kind !== 'recent') || [];
+  const recent = data?.items.filter((item) => item.kind === 'recent') || [];
+  const labels = {
+    deleted: '原始记录已删除，摘录已清理',
+    disabled: '该原话已关闭召回，暂不展示',
+    changed: '知识已更新，以下为当时版本',
+    archived: '知识已归档，以下为当时版本',
+  };
+  return (
+    <Modal title="这次回答的参考记录" onClose={onClose} wide>
+      {error ? (
+        <p role="alert">{error}</p>
+      ) : !data ? (
+        <p>读取参考记录…</p>
+      ) : (
+        <>
+          <p className="form-note">{data.note}</p>
+          {data.recorded && (
+            <>
+              <p className="form-note">
+                {data.model} · {date(data.createdAt)} {time(data.createdAt)}
+              </p>
+              <h3>检索出的知识与原话 · {recalled.length}</h3>
+              {!recalled.length && <p>本轮没有额外召回知识或历史原话。</p>}
+              {recalled.map((item) => (
+                <blockquote className="memory-excerpt" key={`${item.kind}:${item.ordinal}`}>
+                  <small>
+                    {item.kind === 'knowledge' ? '已确认知识' : '历史用户原话'}
+                    {labels[item.state] ? ` · ${labels[item.state]}` : ''}
+                  </small>
+                  {item.snapshot &&
+                    (item.kind === 'knowledge' ? (
+                      <>
+                        <h4>
+                          {item.snapshot.title} · 版本 {item.snapshot.revision}
+                        </h4>
+                        <p>{item.snapshot.body}</p>
+                        <details>
+                          <summary>当时提供的来源摘录</summary>
+                          {item.snapshot.sources.map((source, index) => (
+                            <p key={index}>
+                              {source.quote}
+                              <small> · {source.origin}</small>
+                            </p>
+                          ))}
+                        </details>
+                      </>
+                    ) : (
+                      <>
+                        <h4>
+                          {item.snapshot.session_title} · {date(item.snapshot.created_at)}
+                        </h4>
+                        <p>{item.snapshot.quote}</p>
+                        {item.snapshot.truncated && <small>模型收到的是原话片段。</small>}
+                        <button
+                          className="text-button"
+                          disabled={!canNavigate}
+                          onClick={() => onConversation(item.snapshot.session_id)}
+                        >
+                          打开原会话
+                        </button>
+                      </>
+                    ))}
+                </blockquote>
+              ))}
+              <h3>近期上下文 · {recent.length} 条</h3>
+              <p className="form-note">
+                这部分来自当前会话。记录只保存消息标识、角色和时间，正文仍在原会话。
+              </p>
+              <details>
+                <summary>查看上下文顺序</summary>
+                <ol>
+                  {recent.map((item) => (
+                    <li key={item.ordinal}>
+                      {item.snapshot
+                        ? `${item.snapshot.role === 'user' ? '用户' : '星汐'} · ${date(item.snapshot.created_at)} ${time(item.snapshot.created_at)}`
+                        : labels[item.state]}
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            </>
+          )}
+        </>
+      )}
+    </Modal>
+  );
+}
+
 function Chat({ sid, snap, configured, notify, reload, onSettings }) {
   const [session, setSession] = useState(null),
     [draft, setDraft] = useState(''),
@@ -1631,7 +1738,7 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
     [deleting, setDeleting] = useState(false),
     [changingMemory, setChangingMemory] = useState(false),
     [deleteOpen, setDeleteOpen] = useState(false),
-    [usedMemory, setUsedMemory] = useState([]);
+    [evidenceId, setEvidenceId] = useState(null);
   const bottom = useRef(),
     preserveScroll = useRef(false);
   async function load(id) {
@@ -1639,7 +1746,7 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
     try {
       setSession(await api(`/spaces/${sid}/sessions/${id}`));
       setRetry(null);
-      setUsedMemory([]);
+      setEvidenceId(null);
       localStorage.setItem(`xingxi.session.${sid}`, id);
     } catch (e) {
       notify(e.message, true);
@@ -1674,7 +1781,7 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
       }
       setDraft('');
       setRetry(null);
-      setUsedMemory([]);
+      setEvidenceId(null);
       if (!s.messages.some((m) => m.client_id === payload.clientId)) {
         setSession({
           ...s,
@@ -1692,7 +1799,6 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
       }
       const result = await api(`/spaces/${sid}/sessions/${s.id}/reply`, 'POST', payload);
       setSession(result.session);
-      setUsedMemory(result.conversationMemory || []);
       localStorage.setItem(`xingxi.session.${sid}`, s.id);
     } catch (e) {
       notify(e.message, true);
@@ -1733,7 +1839,7 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
               setSession(null);
               setRetry(null);
               setDraft('');
-              setUsedMemory([]);
+              setEvidenceId(null);
             }}
           >
             <Plus size={16} />
@@ -1821,19 +1927,6 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
               />{' '}
               允许从这段会话召回历史原话
             </label>
-            {usedMemory.length > 0 && (
-              <details>
-                <summary>本轮参考了 {usedMemory.length} 条聊天原话</summary>
-                {usedMemory.map((m) => (
-                  <blockquote key={m.id}>
-                    <small>
-                      {m.session_title} · {date(m.created_at)}
-                    </small>
-                    <p>{m.quote}</p>
-                  </blockquote>
-                ))}
-              </details>
-            )}
           </div>
         )}
         <div className="messages">
@@ -1903,6 +1996,14 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
                     <Markdown>{m.body}</Markdown>
                   </div>
                   <time>{time(m.created_at)}</time>
+                  {m.role === 'assistant' && (
+                    <button
+                      className="text-button evidence-button"
+                      onClick={() => setEvidenceId(m.id)}
+                    >
+                      <Quote size={12} /> 本轮参考
+                    </button>
+                  )}
                 </div>
               </div>
             ))
@@ -1987,6 +2088,19 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
           </small>
         </form>
       </section>
+      {evidenceId && session && (
+        <ReplyEvidenceView
+          sid={sid}
+          sessionId={session.id}
+          messageId={evidenceId}
+          canNavigate={!sending && !loading && !loadingOlder && !deleting && !changingMemory}
+          onClose={() => setEvidenceId(null)}
+          onConversation={(id) => {
+            setEvidenceId(null);
+            load(id);
+          }}
+        />
+      )}
       {memoryView && (
         <Modal title="同空间的聊天记忆" onClose={() => setMemoryView(null)} wide>
           <p className="form-note">
@@ -2049,7 +2163,7 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
         >
           <p>
             将删除「{session?.title}」的消息、聊天索引与 MCP
-            绑定，无法在界面恢复。此前手动收为资料或确认的知识会保留，需另行归档。
+            绑定及本会话的回答参考记录，并清理其他回答记录引用的这段原话，无法在界面恢复。已经生成的回答、此前手动收为资料或确认的知识会保留，需另行处理。
           </p>
           <div className="button-row">
             <button className="secondary" disabled={deleting} onClick={() => setDeleteOpen(false)}>
@@ -2063,7 +2177,7 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
                 try {
                   await api(`/spaces/${sid}/sessions/${session.id}`, 'DELETE');
                   setSession(null);
-                  setUsedMemory([]);
+                  setEvidenceId(null);
                   setRetry(null);
                   setDraft('');
                   setDeleteOpen(false);

@@ -2658,3 +2658,11 @@ select {
   color: var(--muted);
   font-size: 12px;
 }
+
+.evidence-button {
+  margin-left: 12px;
+  font-size: 11px;
+}
+.memory-excerpt h4 {
+  margin: 10px 0;
+}
