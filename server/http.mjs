@@ -31,13 +31,18 @@ const json = (res, value, status = 200) => {
   res.end(JSON.stringify(value));
 };
 async function body(req) {
-  let text = '';
+  const chunks = [];
+  let bytes = 0;
   for await (const chunk of req) {
-    text += chunk;
-    if (Buffer.byteLength(text) > 1200000) throw new Fault('内容超过大小限制', 413);
+    bytes += chunk.length;
+    if (bytes > 1200000) throw new Fault('内容超过大小限制', 413);
+    chunks.push(chunk);
   }
   try {
-    return text ? JSON.parse(text) : {};
+    const text = Buffer.concat(chunks).toString('utf8');
+    const value = text ? JSON.parse(text) : {};
+    if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error();
+    return value;
   } catch {
     throw new Fault('请求 JSON 无效');
   }
@@ -47,11 +52,20 @@ const server = createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
+  );
   const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
   if (!hosts.includes(req.headers.host)) return json(res, { error: 'Host 不被允许' }, 403);
-  const url = new URL(req.url, `http://${req.headers.host}`),
-    path = url.pathname;
   try {
+    let url;
+    try {
+      url = new URL(req.url, `http://${req.headers.host}`);
+    } catch {
+      throw new Fault('请求地址无效');
+    }
+    const path = url.pathname;
     if (path.startsWith('/api/')) {
       const bearer = req.headers.authorization?.replace(/^Bearer /, '');
       const cookie = req.headers.cookie
@@ -83,6 +97,8 @@ const server = createServer(async (req, res) => {
       if (!tail && method === 'PATCH') return json(res, store.updateSpace(sid, b));
       if (tail === 'context' && method === 'GET')
         return json(res, store.context(sid, url.searchParams.get('q') || ''));
+      if (tail === 'conversation-context' && method === 'GET')
+        return json(res, store.conversationContext(sid, url.searchParams.get('q') || ''));
       if (tail === 'sources' && method === 'POST') return json(res, store.ingest(sid, b), 201);
       if (tail === 'entries' && method === 'POST') return json(res, store.propose(sid, b), 201);
       if (tail === 'relations' && method === 'POST') return json(res, store.relate(sid, b), 201);
@@ -90,6 +106,12 @@ const server = createServer(async (req, res) => {
         return json(res, service.compile(sid, b.sourceId), 202);
       if (tail === 'sessions' && method === 'POST')
         return json(res, store.createSession(sid, b.title), 201);
+      if (tail === 'sessions' && method === 'GET')
+        return json(
+          res,
+          store.sessionList(sid, { before: url.searchParams.get('before') ?? undefined }),
+        );
+      if (tail === 'session-open' && method === 'POST') return json(res, store.openSession(sid, b));
       if (tail === 'export' && method === 'GET') {
         res.writeHead(200, {
           'Content-Type': 'text/markdown; charset=utf-8',
@@ -107,6 +129,10 @@ const server = createServer(async (req, res) => {
       }
       if (parts[0] === 'jobs' && id && method === 'GET') return json(res, service.job(sid, id));
       if (parts[0] === 'sessions' && id) {
+        if (parts.length === 2 && method === 'PATCH')
+          return json(res, store.updateSession(sid, id, b));
+        if (parts.length === 2 && method === 'DELETE')
+          return json(res, service.deleteSession(sid, id));
         if (parts[2] === 'source' && method === 'POST')
           return json(res, store.sessionSource(sid, id), 201);
         if (parts[2] === 'reply' && method === 'POST')
@@ -154,7 +180,7 @@ const server = createServer(async (req, res) => {
       { error: e instanceof Fault ? e.message : '服务出错，请检查本机运行状态。' },
       e.status || 500,
     );
-    if (!(e instanceof Fault)) console.error(e);
+    if (!(e instanceof Fault)) console.error('星汐请求失败；未记录请求正文或错误原文。');
   }
 });
 server.listen(port, '127.0.0.1', () =>

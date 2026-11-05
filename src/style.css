@@ -2612,3 +2612,39 @@ select {
     margin-bottom: 16px;
   }
 }
+
+.memory-toggle,
+.chat-memory-status label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.memory-toggle input,
+.chat-memory-status input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.chat-memory-status {
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  max-height: 170px;
+  overflow: auto;
+}
+.chat-memory-status details {
+  margin-top: 6px;
+}
+.chat-memory-status blockquote,
+.memory-excerpt {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-left: 2px solid var(--accent);
+  background: rgba(123, 110, 196, 0.04);
+  overflow-wrap: anywhere;
+}
+.chat-memory-status blockquote p,
+.memory-excerpt p {
+  white-space: pre-wrap;
+}

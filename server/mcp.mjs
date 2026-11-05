@@ -7,15 +7,20 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dir = resolve(process.env.XINGXI_DATA_DIR || resolve(root, '.local'));
-const base = process.env.XINGXI_URL || 'http://127.0.0.1:4180';
-const parsed = new URL(base);
+const parsed = new URL(process.env.XINGXI_URL || 'http://127.0.0.1:4180');
 if (
   parsed.protocol !== 'http:' ||
   !['localhost', '127.0.0.1'].includes(parsed.hostname) ||
   parsed.username ||
-  parsed.password
+  parsed.password ||
+  parsed.pathname !== '/' ||
+  parsed.search ||
+  parsed.hash
 )
   throw new Error('MCP 首版仅连接本机 HTTP 服务');
+// Pin localhost to the loopback address; never resolve a configured name through DNS.
+parsed.hostname = '127.0.0.1';
+const base = parsed.origin;
 async function request(path, method = 'GET', body) {
   let token;
   try {
@@ -32,6 +37,7 @@ async function request(path, method = 'GET', body) {
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(110000),
+      redirect: 'error',
     });
   } catch {
     throw new Error('无法连接本机星汐，请确认服务已启动且端口正确。');
@@ -139,6 +145,30 @@ tool(
   { ...sid, jobId: id },
   (a) => request(`${spacePath(a)}/jobs/${a.jobId}`),
   true,
+);
+tool(
+  'conversation_recall',
+  '检索同空间自动保存的历史用户原话，或在 query 为空时读取近期片段。不调用模型；不是已确认知识，保留时间及假设限定。遵守空间和会话的记忆开关。',
+  { ...sid, query: z.string().max(2000).default('') },
+  (a) => request(`${spacePath(a)}/conversation-context?q=${encodeURIComponent(a.query)}`),
+  true,
+);
+tool(
+  'session_list',
+  '分页列出空间内的持久会话，用于恢复网页或其他 Agent 已保存的对话。',
+  { ...sid, before: z.number().int().positive().optional() },
+  (a) => request(`${spacePath(a)}/sessions${a.before ? `?before=${a.before}` : ''}`),
+  true,
+);
+tool(
+  'session_open',
+  '用稳定 binding 打开或创建同一会话；同空间相同 binding 跨客户端重启仍返回相同会话。只在用户要求新话题时更换绑定。不要在 binding 中放凭证。',
+  {
+    ...sid,
+    binding: z.string().min(1).max(150),
+    title: z.string().min(1).max(100).default('Agent 对话'),
+  },
+  (a) => request(`${spacePath(a)}/session-open`, 'POST', a),
 );
 tool(
   'session_create',

@@ -1270,9 +1270,11 @@ function Workshop({ snap, settings, setSettings, reload, run, busy, notify, onIm
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            const persona = new FormData(e.currentTarget).get('persona');
+            const form = new FormData(e.currentTarget);
+            const persona = form.get('persona');
+            const recallEnabled = form.get('recallEnabled') === 'on';
             run(async () => {
-              await api(`/spaces/${sid}`, 'PATCH', { persona });
+              await api(`/spaces/${sid}`, 'PATCH', { persona, recallEnabled });
               await reload();
               notify('对话设定已更新，下次回复生效。');
             });
@@ -1288,6 +1290,14 @@ function Workshop({ snap, settings, setSettings, reload, run, busy, notify, onIm
               required
             />
           </label>
+          <label className="memory-toggle">
+            <input type="checkbox" name="recallEnabled" defaultChecked={snap.space.recallEnabled} />
+            自动延续同空间聊天
+          </label>
+          <p className="form-note">
+            本机检索历史用户原话，网页和 MCP
+            共用。关闭后不再召回其他会话或更早的片段；当前会话近期消息和已确认知识仍可用于回答。原话不会自动变成正式知识。
+          </p>
           <div className="persona-hints">
             <span>
               <Check size={12} />
@@ -1413,7 +1423,13 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
     [sending, setSending] = useState(false),
     [loading, setLoading] = useState(true),
     [retry, setRetry] = useState(null),
-    [loadingOlder, setLoadingOlder] = useState(false);
+    [loadingOlder, setLoadingOlder] = useState(false),
+    [memoryView, setMemoryView] = useState(null),
+    [memoryQuery, setMemoryQuery] = useState(''),
+    [deleting, setDeleting] = useState(false),
+    [changingMemory, setChangingMemory] = useState(false),
+    [deleteOpen, setDeleteOpen] = useState(false),
+    [usedMemory, setUsedMemory] = useState([]);
   const bottom = useRef(),
     preserveScroll = useRef(false);
   async function load(id) {
@@ -1421,6 +1437,8 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
     try {
       setSession(await api(`/spaces/${sid}/sessions/${id}`));
       setRetry(null);
+      setUsedMemory([]);
+      localStorage.setItem(`xingxi.session.${sid}`, id);
     } catch (e) {
       notify(e.message, true);
     } finally {
@@ -1428,7 +1446,8 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
     }
   }
   useEffect(() => {
-    const id = snap.sessions[0]?.id;
+    const saved = localStorage.getItem(`xingxi.session.${sid}`);
+    const id = snap.sessions.find((s) => s.id === saved)?.id || snap.sessions[0]?.id;
     if (id) load(id);
     else setLoading(false);
   }, []);
@@ -1440,7 +1459,8 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
     bottom.current?.scrollIntoView({ behavior: 'instant', block: 'nearest' });
   }, [session?.messages.length, sending]);
   async function send(payload) {
-    if (!payload.body.trim() || sending) return;
+    if (!payload.body.trim() || sending || loading || loadingOlder || deleting || changingMemory)
+      return;
     setSending(true);
     let s = session;
     try {
@@ -1451,14 +1471,41 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
       }
       setDraft('');
       setRetry(null);
+      setUsedMemory([]);
+      if (!s.messages.some((m) => m.client_id === payload.clientId)) {
+        setSession({
+          ...s,
+          messages: [
+            ...s.messages,
+            {
+              id: `pending:${payload.clientId}`,
+              client_id: payload.clientId,
+              role: 'user',
+              body: payload.body,
+              created_at: new Date().toISOString(),
+            },
+          ],
+        });
+      }
       const result = await api(`/spaces/${sid}/sessions/${s.id}/reply`, 'POST', payload);
       setSession(result.session);
+      setUsedMemory(result.conversationMemory || []);
+      localStorage.setItem(`xingxi.session.${sid}`, s.id);
     } catch (e) {
       notify(e.message, true);
       setRetry(payload);
       if (s) setSession(await api(`/spaces/${sid}/sessions/${s.id}`).catch(() => s));
     } finally {
       setSending(false);
+    }
+  }
+  async function showMemories(query = '') {
+    try {
+      setMemoryView(
+        await api(`/spaces/${sid}/conversation-context?q=${encodeURIComponent(query)}`),
+      );
+    } catch (e) {
+      notify(e.message, true);
     }
   }
   async function archiveConversation() {
@@ -1478,11 +1525,12 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
           <button
             className="icon-button"
             aria-label="新建对话"
-            disabled={sending || loading}
+            disabled={sending || loading || loadingOlder || deleting || changingMemory}
             onClick={() => {
               setSession(null);
               setRetry(null);
               setDraft('');
+              setUsedMemory([]);
             }}
           >
             <Plus size={16} />
@@ -1491,7 +1539,7 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
         {snap.sessions.map((s) => (
           <button
             key={s.id}
-            disabled={sending || loading}
+            disabled={sending || loading || loadingOlder || deleting || changingMemory}
             className={s.id === session?.id ? 'active' : ''}
             onClick={() => load(s.id)}
           >
@@ -1508,7 +1556,7 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
         )}
         <div className="session-note">
           <ShieldCheck size={15} />
-          会话记录留在当前空间
+          {snap.space.recallEnabled ? '同空间聊天记忆已开启' : '历史聊天召回已关闭'}
         </div>
       </aside>
       <section className="chat-panel">
@@ -1520,6 +1568,24 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
             </strong>
             <small>{session ? '这段对话会被保留下来' : '一个新的开始'}</small>
           </div>
+          <button
+            className="text-button"
+            onClick={() => {
+              setMemoryQuery('');
+              showMemories();
+            }}
+          >
+            聊天记忆
+          </button>
+          {session && (
+            <button
+              className="text-button"
+              disabled={sending || loadingOlder || changingMemory}
+              onClick={() => setDeleteOpen(true)}
+            >
+              删除会话
+            </button>
+          )}
           {session?.messages.length > 0 && (
             <button className="text-button" disabled={sending} onClick={archiveConversation}>
               <BookOpen size={14} />
@@ -1527,6 +1593,46 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
             </button>
           )}
         </header>
+        {session && (
+          <div className="chat-memory-status">
+            <label>
+              <input
+                type="checkbox"
+                checked={session.recallEnabled}
+                disabled={sending || changingMemory || deleting}
+                onChange={async (e) => {
+                  const recallEnabled = e.target.checked;
+                  setChangingMemory(true);
+                  try {
+                    setSession(
+                      await api(`/spaces/${sid}/sessions/${session.id}`, 'PATCH', {
+                        recallEnabled,
+                      }),
+                    );
+                  } catch (error) {
+                    notify(error.message, true);
+                  } finally {
+                    setChangingMemory(false);
+                  }
+                }}
+              />{' '}
+              允许从这段会话召回历史原话
+            </label>
+            {usedMemory.length > 0 && (
+              <details>
+                <summary>本轮参考了 {usedMemory.length} 条聊天原话</summary>
+                {usedMemory.map((m) => (
+                  <blockquote key={m.id}>
+                    <small>
+                      {m.session_title} · {date(m.created_at)}
+                    </small>
+                    <p>{m.quote}</p>
+                  </blockquote>
+                ))}
+              </details>
+            )}
+          </div>
+        )}
         <div className="messages">
           {session?.hasMoreMessages && (
             <button
@@ -1644,14 +1750,30 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
-                  if (configured && !sending && draft.trim())
+                  if (
+                    configured &&
+                    !sending &&
+                    !loading &&
+                    !loadingOlder &&
+                    !deleting &&
+                    !changingMemory &&
+                    draft.trim()
+                  )
                     send({ body: draft, clientId: crypto.randomUUID() });
                 }
               }}
             />
             <button
               className="send-button"
-              disabled={!configured || sending || !draft.trim() || loading}
+              disabled={
+                !configured ||
+                sending ||
+                !draft.trim() ||
+                loading ||
+                loadingOlder ||
+                deleting ||
+                changingMemory
+              }
               aria-label="发送消息"
             >
               <Send size={18} />
@@ -1662,6 +1784,101 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
           </small>
         </form>
       </section>
+      {memoryView && (
+        <Modal title="同空间的聊天记忆" onClose={() => setMemoryView(null)} wide>
+          <p className="form-note">
+            这些是自动保存的用户原话，可能含假设或已过时的表达，并非已确认知识。只保存在本机索引；需要回答时才将有限相关片段发送给
+            DeepSeek。
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              showMemories(memoryQuery);
+            }}
+          >
+            <label>
+              查找过去聊过的内容
+              <input
+                value={memoryQuery}
+                maxLength={2000}
+                onChange={(e) => setMemoryQuery(e.target.value)}
+                placeholder="留空查看近期原话"
+              />
+            </label>
+            <button className="secondary">检索原话</button>
+          </form>
+          {!memoryView.enabled ? (
+            <p>此空间已关闭聊天记忆召回，可以在星工坊重新开启。</p>
+          ) : !memoryView.excerpts.length ? (
+            <p>没有找到相关原话。</p>
+          ) : (
+            memoryView.excerpts.map((m) => (
+              <blockquote key={m.id} className="memory-excerpt">
+                <small>
+                  {m.session_title} · {date(m.created_at)} {time(m.created_at)}
+                </small>
+                <p>
+                  {m.truncated ? '…' : ''}
+                  {m.quote}
+                  {m.truncated ? '…' : ''}
+                </p>
+                <button
+                  className="text-button"
+                  disabled={sending || loadingOlder}
+                  onClick={() => {
+                    setMemoryView(null);
+                    load(m.session_id);
+                  }}
+                >
+                  打开原会话
+                </button>
+              </blockquote>
+            ))
+          )}
+        </Modal>
+      )}
+      {deleteOpen && (
+        <Modal
+          title="删除这段会话？"
+          onClose={() => {
+            if (!deleting) setDeleteOpen(false);
+          }}
+        >
+          <p>
+            将删除「{session?.title}」的消息、聊天索引与 MCP
+            绑定，无法在界面恢复。此前手动收为资料或确认的知识会保留，需另行归档。
+          </p>
+          <div className="button-row">
+            <button className="secondary" disabled={deleting} onClick={() => setDeleteOpen(false)}>
+              保留
+            </button>
+            <button
+              className="primary"
+              disabled={deleting}
+              onClick={async () => {
+                setDeleting(true);
+                try {
+                  await api(`/spaces/${sid}/sessions/${session.id}`, 'DELETE');
+                  setSession(null);
+                  setUsedMemory([]);
+                  setRetry(null);
+                  setDraft('');
+                  setDeleteOpen(false);
+                  localStorage.removeItem(`xingxi.session.${sid}`);
+                  await reload();
+                  notify('会话与聊天索引已删除。');
+                } catch (e) {
+                  notify(e.message, true);
+                } finally {
+                  setDeleting(false);
+                }
+              }}
+            >
+              {deleting ? '正在删除…' : '删除会话'}
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

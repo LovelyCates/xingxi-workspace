@@ -66,8 +66,16 @@ async function bench(StoreClass, name) {
         body: '资料片段。'.repeat(totals.sourceChars / 5),
       });
     const msg = store.db.prepare('INSERT INTO messages VALUES(?,?,?,?,?,?)');
-    for (let i = 0; i < totals.messages; i++)
-      msg.run(`m${i}`, s.id, i % 2 ? 'assistant' : 'user', '合成消息。'.repeat(25), `c${i}`, stamp);
+    for (let i = 0; i < totals.messages; i++) {
+      const body = '合成消息。'.repeat(25) + (i === 3456 ? '纸舟独特标记' : '');
+      const role = i % 2 ? 'assistant' : 'user';
+      const result = msg.run(`m${i}`, s.id, role, body, `c${i}`, stamp);
+      store.conversations?.index(space.id, {
+        sequence: Number(result.lastInsertRowid),
+        role,
+        body,
+      });
+    }
   });
   const query = store.context(space.id, '青灯凭据');
   if (!query.entries.some((e) => e.id === 'e3456'))
@@ -92,7 +100,15 @@ async function bench(StoreClass, name) {
     from_id: `e${i % totals.entries}`,
     to_id: `e${(i * 7 + 1) % totals.entries}`,
   }));
-  if (name === 'current') data.graphPreparation = measure(() => graphSubset(entries, relations));
+  if (name === 'current') {
+    data.graphPreparation = measure(() => graphSubset(entries, relations));
+    const recall = store.conversationContext(space.id, '纸舟');
+    if (recall.excerpts[0]?.id !== 'm3456') throw new Error('Conversation benchmark recall failed');
+    data.conversationRecallSelective = measure(() => store.conversationContext(space.id, '纸舟'));
+    data.conversationRecallCommon = measure(() => store.conversationContext(space.id, '合成消息'));
+    data.conversationRecallRecent = measure(() => store.conversationContext(space.id, ''));
+    data.conversationResponseBytes = Buffer.byteLength(JSON.stringify(recall));
+  }
   store.close();
   return data;
 }
