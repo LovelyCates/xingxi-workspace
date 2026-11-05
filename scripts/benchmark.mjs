@@ -1,4 +1,5 @@
-import { performance } from 'node:perf_hooks';
+import { performance, monitorEventLoopDelay } from 'node:perf_hooks';
+import { backupTask } from '../server/backups.mjs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir, cpus } from 'node:os';
 import { join } from 'node:path';
@@ -129,6 +130,48 @@ async function bench(StoreClass, name) {
     data.conversationRecallCommon = measure(() => store.conversationContext(space.id, '合成消息'));
     data.conversationRecallRecent = measure(() => store.conversationContext(space.id, ''));
     data.conversationResponseBytes = Buffer.byteLength(JSON.stringify(recall));
+    if (process.argv.includes('--backup')) {
+      const destination = join(dir, 'benchmark-backup');
+      const delay = monitorEventLoopDelay({ resolution: 10 });
+      const reads = [];
+      const timer = setInterval(() => {
+        const start = performance.now();
+        store.session(space.id, s.id, { limit: 20 });
+        reads.push(performance.now() - start);
+      }, 10);
+      delay.enable();
+      const phases = {};
+      let backupResult;
+      try {
+        for (const operation of ['create', 'verify', 'restore']) {
+          const start = performance.now();
+          const result = await backupTask({
+            operation,
+            source: operation === 'create' ? join(dir, `${name}.sqlite`) : destination,
+            destination:
+              operation === 'create'
+                ? destination
+                : operation === 'restore'
+                  ? join(dir, 'benchmark-restored')
+                  : undefined,
+          });
+          phases[operation] = +(performance.now() - start).toFixed(2);
+          if (operation === 'create') backupResult = result;
+        }
+      } finally {
+        clearInterval(timer);
+        delay.disable();
+      }
+      reads.sort((a, b) => a - b);
+      data.backup = {
+        phaseWallMs: phases,
+        bytes: backupResult.manifest.bytes,
+        concurrentReadSamples: reads.length,
+        concurrentReadMedianMs: +(reads[Math.floor(reads.length / 2)] || 0).toFixed(2),
+        eventLoopDelayMaxMs: +(delay.max / 1e6).toFixed(2),
+        note: 'Single run; background worker copy/hash/integrity checks, while the main thread reads 20 messages every 10ms. Not browser or network latency.',
+      };
+    }
     if (process.argv.includes('--evidence')) {
       const pagesBefore = store.db.prepare('PRAGMA page_count').get().page_count;
       const pageSize = store.db.prepare('PRAGMA page_size').get().page_size;

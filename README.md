@@ -8,7 +8,7 @@
 
 ## 启动
 
-需要 Node.js **22.13+**（推荐 Node 24 LTS）及 npm。首次安装需要网络。
+需要 Node.js **22.16+（22.x）或 24+**（推荐 Node 24 LTS）及 npm。首次安装需要网络。
 
 ```sh
 npm ci
@@ -114,7 +114,7 @@ npm start
   access-token           # 本机 HTTP/MCP 令牌，权限 0600
 ```
 
-SQLite 是唯一事实存储，原始资料不可通过 API 修改。Markdown 是可重建的导出视图，**不是双向同步文件**。停服后复制整个 `.local/` 即可备份；运行中不要只复制主 SQLite 文件。备份包含私密资料和 Key，请妥善保存。界面「清除 Key」会从本机配置删除 Key，不会替代 DeepSeek 平台的密钥撤销。
+SQLite 是唯一事实存储，原始资料不可通过 API 修改。Markdown 是可重建的导出视图，**不是双向同步文件**。星工坊支持创建本机在线备份、校验、恢复为独立副本；也可使用 `npm run backup -- create/verify/restore`。备份包含全部空间数据，不复制模型配置和访问令牌文件；正文中的私密内容仍会保留。完整操作、MCP 重连和版本边界见 [备份与恢复](docs/BACKUP.md)。运行中不要只复制主 SQLite 文件，也不要把恢复文件覆盖到活动实例。界面「清除 Key」会从本机配置删除 Key，不会替代 DeepSeek 平台的密钥撤销。
 
 只有用户明确发起提炼或对话时，必要的原文或上下文会发送到 DeepSeek。运行时除 DeepSeek 外没有其他外部 HTTP 调用、遥测、远程图片或外部字体。模型请求固定官方 HTTPS 地址，禁止跟随重定向。MCP 将 localhost 固定为 127.0.0.1，且拒绝跳转；浏览器连接策略仅允许同源。依赖安装、开发时的 GitHub 操作及用户主动打开外链不属于应用的后台数据外发。资料 Markdown 不执行 HTML。Web 使用本机 HttpOnly / SameSite cookie；MCP 使用令牌。服务拒绝跨站请求及未知 Host。首版仅供受信任的单用户本机环境，本机令牌不提供角色隔离。
 

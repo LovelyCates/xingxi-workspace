@@ -6,6 +6,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { Store, Fault } from './store.mjs';
 import { Service } from './service.mjs';
 import { seed } from './seed.mjs';
+import { Backups } from './backups.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = resolve(process.env.XINGXI_DATA_DIR || resolve(root, '.local'));
@@ -13,6 +14,7 @@ const port = Number(process.env.PORT || 4180);
 const store = new Store(resolve(dataDir, 'xingxi.sqlite'));
 if (process.env.XINGXI_NO_SEED !== '1') seed(store);
 const service = new Service(store, dataDir);
+const backups = new Backups(dataDir);
 let vite;
 if (process.argv.includes('--dev')) {
   const { createServer: createVite } = await import('vite');
@@ -84,6 +86,12 @@ const server = createServer(async (req, res) => {
         if (method === 'GET') return json(res, service.settings());
         if (method === 'PUT') return json(res, service.saveSettings(b));
       }
+      if (path === '/api/backups' && method === 'GET') return json(res, await backups.list());
+      if (path === '/api/backups' && method === 'POST')
+        return json(res, await backups.start('create'), 202);
+      const backupRoute = path.match(/^\/api\/backups\/([^/]+)\/(verify|restore)$/);
+      if (backupRoute && method === 'POST')
+        return json(res, await backups.start(backupRoute[2], backupRoute[1]), 202);
       if (path === '/api/spaces') {
         if (method === 'GET') return json(res, store.spaces());
         if (method === 'POST') return json(res, store.createSpace(b), 201);
@@ -209,6 +217,7 @@ server.listen(port, '127.0.0.1', () =>
 const shutdown = () =>
   server.close(async () => {
     await service.queue;
+    await backups.pending;
     store.close();
     if (vite) await vite.close();
     process.exit(0);

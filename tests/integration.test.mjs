@@ -280,6 +280,119 @@ test('真实 HTTP 与 stdio MCP：认证、跨站拒绝、命名空间、入库�
     (await call('session_read', { spaceId: a.id, sessionId: mcpSession.id })).isError,
     true,
   );
+  const bound = await call('session_open', { spaceId: a.id, binding: 'restore-continuity' });
+  await call('session_append', {
+    spaceId: a.id,
+    sessionId: bound.id,
+    role: 'user',
+    body: '虚构验收：恢复后仍有银杏标记。',
+    clientId: 'restored-memory',
+  });
+  const backupStart = await fetch(`${base}/api/backups`, { method: 'POST', headers, body: '{}' });
+  assert.equal(backupStart.status, 202);
+  let backupStatus;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    backupStatus = await (await fetch(`${base}/api/backups`, { headers })).json();
+    if (backupStatus.active.status !== 'running') break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.equal(backupStatus.active.status, 'done');
+  assert.equal(backupStatus.items.length, 1);
+  const item = backupStatus.items[0];
+  assert.equal(item.includesSecrets, false);
+  assert.equal((await fetch(`${base}/api/backups`)).status, 401);
+  assert.equal(
+    (
+      await fetch(`${base}/api/backups`, {
+        method: 'POST',
+        headers: { ...headers, Origin: 'https://evil.example' },
+        body: '{}',
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await fetch(`${base}/api/backups/invalid/restore`, { method: 'POST', headers, body: '{}' }))
+      .status,
+    400,
+  );
+  assert.equal(
+    (await fetch(`${base}/api/backups/${item.id}/restore`, { method: 'POST', headers, body: '{}' }))
+      .status,
+    202,
+  );
+  for (let attempt = 0; attempt < 100; attempt++) {
+    backupStatus = await (await fetch(`${base}/api/backups`, { headers })).json();
+    if (backupStatus.active.status !== 'running') break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.equal(backupStatus.active.status, 'done');
+  const restoredDir = backupStatus.active.result.path;
+  // Check exact IDs before starting the independent restored service.
+  const restoredStore = new Store(join(restoredDir, 'xingxi.sqlite'));
+  try {
+    assert.deepEqual(restoredStore.replyEvidence.read(a.id, s.id, manualReply.id), mcpEvidence);
+    assert.equal(restoredStore.session(a.id, s.id).messages.length, 2);
+  } finally {
+    restoredStore.close();
+  }
+  const restoreProbe = createServer();
+  await new Promise((r) => restoreProbe.listen(0, '127.0.0.1', r));
+  const restorePort = restoreProbe.address().port;
+  await new Promise((r) => restoreProbe.close(r));
+  const recovered = spawn(process.execPath, ['server/http.mjs'], {
+    cwd: resolve('.'),
+    env: { ...env, XINGXI_DATA_DIR: restoredDir, PORT: String(restorePort) },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const recoveredClient = new Client({ name: 'restore-test', version: '1.0' });
+  try {
+    await Promise.race([
+      once(recovered.stdout, 'data'),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('恢复服务未启动')), 8000).unref(),
+      ),
+    ]);
+    await recoveredClient.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [resolve('server/mcp.mjs')],
+        env: {
+          ...env,
+          XINGXI_DATA_DIR: restoredDir,
+          XINGXI_URL: `http://127.0.0.1:${restorePort}`,
+        },
+        stderr: 'pipe',
+      }),
+    );
+    const recoverCall = async (name, arguments_) => {
+      const result = await recoveredClient.callTool({ name, arguments: arguments_ });
+      assert.ok(!result.isError, result.content[0].text);
+      return JSON.parse(result.content[0].text);
+    };
+    assert.equal(
+      (await recoverCall('session_open', { spaceId: a.id, binding: 'restore-continuity' })).id,
+      bound.id,
+    );
+    assert.equal(
+      (await recoverCall('conversation_recall', { spaceId: a.id, query: '银杏' })).excerpts.length,
+      1,
+    );
+    assert.deepEqual(
+      await recoverCall('chat_evidence', {
+        spaceId: a.id,
+        sessionId: s.id,
+        messageId: manualReply.id,
+      }),
+      mcpEvidence,
+    );
+    assert.notEqual(readFileSync(join(restoredDir, 'access-token'), 'utf8'), token);
+  } finally {
+    await recoveredClient.close();
+    const exit = once(recovered, 'exit');
+    recovered.kill('SIGTERM');
+    await exit;
+  }
   const policy = (await fetch(`${base}/api/spaces`, { headers })).headers.get(
     'content-security-policy',
   );

@@ -6,7 +6,7 @@
   "description": "星汐：项目 Wiki、陪伴记忆与 MCP 对话工作台。派生视觉代码来自 Yuuyuko-uu/dsh-xingxi。",
   "license": "SEE LICENSE IN LICENSE",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.16.0 || >=24.0.0"
   },
   "scripts": {
     "dev": "node server/http.mjs --dev",
@@ -17,7 +17,8 @@
     "check": "npm test && npm run build",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "benchmark": "node scripts/benchmark.mjs"
+    "benchmark": "node scripts/benchmark.mjs",
+    "backup": "node scripts/backup.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

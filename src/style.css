@@ -2666,3 +2666,35 @@ select {
 .memory-excerpt h4 {
   margin: 10px 0;
 }
+
+.backup-panel {
+  grid-column: 1 / -1;
+}
+.backup-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.backup-list article {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  display: grid;
+  gap: 8px;
+}
+.backup-panel code,
+.backup-panel pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.backup-list small {
+  color: var(--muted);
+}
+.backup-restored {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}

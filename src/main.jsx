@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import Graph, { kindNames, kindColors } from './Graph';
 import './style.css';
+import Backups from './Backups';
 
 async function api(path, method = 'GET', data) {
   const res = await fetch(`/api${path}`, {
@@ -1553,6 +1554,7 @@ function Workshop({
           复制配置模板
         </button>
       </section>
+      <Backups api={api} notify={notify} />
       {sourceView && (
         <Modal title={sourceView.title} onClose={() => setSourceView(null)} wide>
           <div className="source-text">{sourceView.body}</div>
