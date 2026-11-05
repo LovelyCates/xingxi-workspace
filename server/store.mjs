@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { searchTerms } from './search.mjs';
 
 export class Fault extends Error {
   constructor(message, status = 400) {
@@ -36,7 +37,32 @@ export class Store {
       CREATE INDEX IF NOT EXISTS entries_space ON entries(space_id,status);
       CREATE INDEX IF NOT EXISTS sources_space ON sources(space_id);
       CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id,created_at);
+      CREATE INDEX IF NOT EXISTS messages_order ON messages(session_id);
+      CREATE INDEX IF NOT EXISTS entries_recent ON entries(space_id,status,updated_at DESC);
+      CREATE INDEX IF NOT EXISTS sessions_recent ON sessions(space_id,created_at DESC);
+      CREATE INDEX IF NOT EXISTS jobs_recent ON jobs(space_id,created_at DESC);
+      CREATE TABLE IF NOT EXISTS entry_terms(space_id TEXT NOT NULL,term TEXT NOT NULL,entry_id TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,weight INTEGER NOT NULL,PRIMARY KEY(space_id,term,entry_id));
+      CREATE INDEX IF NOT EXISTS entry_terms_entry ON entry_terms(entry_id);
+      CREATE TABLE IF NOT EXISTS migrations(name TEXT PRIMARY KEY);
     `);
+    if (!this.db.prepare('SELECT 1 FROM migrations WHERE name=?').get('term-index-v1')) {
+      this.transaction(() => {
+        for (const entry of this.db
+          .prepare("SELECT * FROM entries WHERE status='accepted'")
+          .iterate())
+          this.indexEntry(entry);
+        this.db.prepare('INSERT INTO migrations VALUES(?)').run('term-index-v1');
+      });
+    }
+  }
+  indexEntry(entry) {
+    this.db.prepare('DELETE FROM entry_terms WHERE entry_id=?').run(entry.id);
+    if (entry.status !== 'accepted') return;
+    const weights = new Map(searchTerms(entry.body, true).map((term) => [term, 1]));
+    for (const term of searchTerms(entry.title, true))
+      weights.set(term, (weights.get(term) || 0) + 3);
+    const insert = this.db.prepare('INSERT INTO entry_terms VALUES(?,?,?,?)');
+    for (const [term, weight] of weights) insert.run(entry.space_id, term, entry.id, weight);
   }
   close() {
     this.db.close();
@@ -172,7 +198,9 @@ export class Store {
           now(),
           id,
         );
-      return this.entry(spaceId, id);
+      const updated = this.entry(spaceId, id);
+      this.indexEntry(updated);
+      return updated;
     });
   }
   history(spaceId, id) {
@@ -189,7 +217,7 @@ export class Store {
     this.db
       .prepare('INSERT OR IGNORE INTO relations VALUES(?,?,?,?,?)')
       .run(uid(), spaceId, a.id, b.id, str(label, '关系', 30));
-    return this.snapshot(spaceId).relations;
+    return this.db.prepare('SELECT * FROM relations WHERE space_id=?').all(spaceId);
   }
   snapshot(spaceId) {
     return {
@@ -199,7 +227,9 @@ export class Store {
         .all(spaceId)
         .map(parse),
       sources: this.db
-        .prepare('SELECT * FROM sources WHERE space_id=? ORDER BY created_at DESC')
+        .prepare(
+          'SELECT id,space_id,title,origin,created_at,length(body) AS body_length FROM sources WHERE space_id=? ORDER BY created_at DESC',
+        )
         .all(spaceId),
       relations: this.db.prepare('SELECT * FROM relations WHERE space_id=?').all(spaceId),
       sessions: this.db
@@ -212,34 +242,27 @@ export class Store {
   }
   context(spaceId, query = '', limit = 6) {
     this.space(spaceId);
-    const terms = [
-      ...new Set(
-        (query.toLowerCase().match(/[a-z0-9]+|[\u4e00-\u9fff]{1,}/g) || []).flatMap((s) =>
-          /[\u4e00-\u9fff]/.test(s) && s.length > 1
-            ? Array.from({ length: s.length - 1 }, (_, i) => s.slice(i, i + 2))
-            : [s],
-        ),
-      ),
-    ];
-    const entries = this.db
-      .prepare(
-        "SELECT * FROM entries WHERE space_id=? AND status='accepted' ORDER BY updated_at DESC",
-      )
-      .all(spaceId)
-      .map(parse)
-      .map((e) => ({
-        ...e,
-        score: terms.reduce(
-          (n, t) =>
-            n +
-            (e.title.toLowerCase().includes(t) ? 3 : 0) +
-            (e.body.toLowerCase().includes(t) ? 1 : 0),
-          0,
-        ),
-      }))
-      .filter((e) => !terms.length || e.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, Math.max(1, Math.min(12, limit)));
+    const terms = searchTerms(String(query).slice(0, 2000)).slice(0, 80);
+    limit = Math.max(1, Math.min(12, Number(limit) || 6));
+    let entries;
+    if (!terms.length) {
+      entries = this.db
+        .prepare(
+          "SELECT *,0 AS score FROM entries WHERE space_id=? AND status='accepted' ORDER BY updated_at DESC LIMIT ?",
+        )
+        .all(spaceId, limit)
+        .map(parse);
+    } else {
+      const rows = this.db
+        .prepare(
+          `SELECT t.entry_id,SUM(t.weight) AS score FROM entry_terms t WHERE t.space_id=? AND t.term IN (${terms.map(() => '?').join(',')}) GROUP BY t.entry_id ORDER BY score DESC,t.entry_id LIMIT ?`,
+        )
+        .all(spaceId, ...terms, limit);
+      const read = this.db.prepare(
+        "SELECT * FROM entries WHERE space_id=? AND id=? AND status='accepted'",
+      );
+      entries = rows.map((r) => ({ ...parse(read.get(spaceId, r.entry_id)), score: r.score }));
+    }
     return {
       spaceId,
       query,
@@ -256,17 +279,60 @@ export class Store {
       .run(id, spaceId, str(title, '会话标题', 100), now());
     return this.session(spaceId, id);
   }
-  session(spaceId, id) {
+  sessionMeta(spaceId, id) {
     this.space(spaceId);
-    const s = this.db.prepare('SELECT * FROM sessions WHERE id=? AND space_id=?').get(id, spaceId);
-    if (!s) throw new Fault('此空间内没有该会话', 404);
+    const session = this.db
+      .prepare('SELECT * FROM sessions WHERE id=? AND space_id=?')
+      .get(id, spaceId);
+    if (!session) throw new Fault('此空间内没有该会话', 404);
+    return session;
+  }
+  messageByClient(spaceId, sessionId, clientId) {
+    this.sessionMeta(spaceId, sessionId);
+    return this.db
+      .prepare('SELECT * FROM messages WHERE session_id=? AND client_id=?')
+      .get(sessionId, clientId);
+  }
+  session(spaceId, id, { before, limit = 100 } = {}) {
+    const session = this.sessionMeta(spaceId, id);
+    limit = Math.max(1, Math.min(100, Number(limit) || 100));
+    let cursor = Number.MAX_SAFE_INTEGER;
+    if (before !== undefined) {
+      cursor = Number(before);
+      if (!Number.isSafeInteger(cursor) || cursor < 1) throw new Fault('消息游标无效');
+    }
+    const rows = this.db
+      .prepare(
+        'SELECT rowid AS sequence,* FROM messages WHERE session_id=? AND rowid<? ORDER BY rowid DESC LIMIT ?',
+      )
+      .all(id, cursor, limit + 1);
+    const hasMoreMessages = rows.length > limit;
+    const messages = rows.slice(0, limit).reverse();
     return {
-      ...s,
-      messages: this.db.prepare('SELECT * FROM messages WHERE session_id=? ORDER BY rowid').all(id),
+      ...session,
+      messages,
+      hasMoreMessages,
+      nextBefore: hasMoreMessages ? messages[0].sequence : null,
     };
   }
+  sessionSource(spaceId, id) {
+    const session = this.sessionMeta(spaceId, id);
+    let content = '';
+    for (const m of this.db
+      .prepare('SELECT role,body FROM messages WHERE session_id=? ORDER BY rowid')
+      .iterate(id)) {
+      content += (content ? '\n\n' : '') + `${m.role === 'user' ? '用户' : '星汐'}：${m.body}`;
+      if (content.length > 100000)
+        throw new Fault('会话超过 100,000 字符，请复制所需片段后手动导入。', 413);
+    }
+    return this.ingest(spaceId, {
+      title: `对话摘录 · ${session.title}`,
+      body: content,
+      origin: 'conversation',
+    });
+  }
   append(spaceId, sessionId, { role, body, clientId }) {
-    this.session(spaceId, sessionId);
+    this.sessionMeta(spaceId, sessionId);
     if (!['user', 'assistant'].includes(role)) throw new Fault('消息角色无效');
     body = str(body, '消息', 12000);
     clientId = str(clientId, '消息标识', 200);

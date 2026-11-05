@@ -148,9 +148,9 @@ tool(
 );
 tool(
   'session_read',
-  '读取同一空间的持久会话与消息。',
-  session,
-  (a) => request(`${spacePath(a)}/sessions/${a.sessionId}`),
+  '读取同一空间最近最多 100 条消息。hasMoreMessages 为 true 时传入 nextBefore 获取更早消息。',
+  { ...session, before: z.number().int().positive().optional() },
+  (a) => request(`${spacePath(a)}/sessions/${a.sessionId}${a.before ? `?before=${a.before}` : ''}`),
   true,
 );
 tool(

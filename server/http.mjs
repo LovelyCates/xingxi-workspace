@@ -107,11 +107,20 @@ const server = createServer(async (req, res) => {
       }
       if (parts[0] === 'jobs' && id && method === 'GET') return json(res, service.job(sid, id));
       if (parts[0] === 'sessions' && id) {
+        if (parts[2] === 'source' && method === 'POST')
+          return json(res, store.sessionSource(sid, id), 201);
         if (parts[2] === 'reply' && method === 'POST')
           return json(res, await service.reply(sid, id, b));
         if (parts[2] === 'messages' && method === 'POST')
           return json(res, store.append(sid, id, b));
-        if (method === 'GET') return json(res, store.session(sid, id));
+        if (method === 'GET')
+          return json(
+            res,
+            store.session(sid, id, {
+              before: url.searchParams.get('before') ?? undefined,
+              limit: url.searchParams.get('limit') ?? 100,
+            }),
+          );
       }
       throw new Fault('接口不存在', 404);
     }

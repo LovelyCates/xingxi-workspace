@@ -156,7 +156,9 @@ function App() {
     [modal, setModal] = useState(null),
     [notice, setNotice] = useState(null),
     [busy, setBusy] = useState(false),
-    [initialError, setInitialError] = useState('');
+    [initialError, setInitialError] = useState(''),
+    [bookLimit, setBookLimit] = useState(60);
+  useEffect(() => setBookLimit(60), [sid, query, filter]);
   const currentSid = useRef(sid);
   currentSid.current = sid;
   const notify = (text, error = false) => setNotice({ text, error });
@@ -186,8 +188,26 @@ function App() {
   const activeJob = snap?.jobs.some((j) => ['queued', 'running'].includes(j.status));
   useEffect(() => {
     if (!activeJob) return;
-    const id = setInterval(() => reload().catch((e) => notify(e.message, true)), 1500);
-    return () => clearInterval(id);
+    let cancelled = false,
+      timer;
+    const ids = snap.jobs.filter((j) => ['queued', 'running'].includes(j.status)).map((j) => j.id);
+    async function poll() {
+      try {
+        if (!document.hidden) {
+          const jobs = await Promise.all(ids.map((id) => api(`/spaces/${sid}/jobs/${id}`)));
+          if (cancelled) return;
+          if (jobs.some((j) => !['queued', 'running'].includes(j.status))) await reload();
+        }
+      } catch (e) {
+        if (!cancelled) notify(e.message, true);
+      }
+      if (!cancelled) timer = setTimeout(poll, 2000);
+    }
+    timer = setTimeout(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [sid, activeJob]);
   useEffect(() => {
     if (!notice) return;
@@ -517,7 +537,7 @@ function App() {
             {tab === 'book' && (
               <div className={`book-layout ${entry ? 'with-detail' : ''}`}>
                 <div className="entry-grid">
-                  {visible.map((e) => (
+                  {visible.slice(0, bookLimit).map((e) => (
                     <button
                       className={`entry-card ${selected === e.id ? 'chosen' : ''}`}
                       onClick={() => setSelected(e.id)}
@@ -538,6 +558,11 @@ function App() {
                       </footer>
                     </button>
                   ))}
+                  {visible.length > bookLimit && (
+                    <button className="secondary" onClick={() => setBookLimit((n) => n + 60)}>
+                      再显示 60 条（已显示 {bookLimit} / {visible.length}）
+                    </button>
+                  )}
                   {!visible.length && (
                     <Empty title="这里还留着空白">导入资料，或切换筛选条件，寻找下一颗星。</Empty>
                   )}
@@ -756,7 +781,17 @@ function EntryDetail({
       {e.evidence.map((ev, i) => {
         const s = sources.find((s) => s.id === ev.sourceId);
         return (
-          <button className="evidence-card" key={i} onClick={() => setSource(s)}>
+          <button
+            className="evidence-card"
+            key={i}
+            onClick={async () => {
+              try {
+                setSource(await api(`/spaces/${sid}/sources/${s.id}`));
+              } catch (err) {
+                notify(err.message, true);
+              }
+            }}
+          >
             <Quote size={16} />
             <p>{ev.quote}</p>
             <span>
@@ -1081,20 +1116,30 @@ function Workshop({ snap, settings, setSettings, reload, run, busy, notify, onIm
         <div className="source-list">
           {snap.sources.map((s) => (
             <div className="source-row" key={s.id}>
-              <button className="source-name" onClick={() => setSourceView(s)}>
+              <button
+                className="source-name"
+                onClick={() =>
+                  run(async () => setSourceView(await api(`/spaces/${sid}/sources/${s.id}`)))
+                }
+              >
                 <span className="file-icon">
                   <FileText size={20} />
                 </span>
                 <div>
                   <strong>{s.title}</strong>
                   <small>
-                    {s.body.length.toLocaleString()} 字符 · {date(s.created_at)}
+                    {s.body_length.toLocaleString()} 字符 · {date(s.created_at)}
                     {s.origin === 'example' ? ' · 虚构示例' : ''}
                   </small>
                 </div>
               </button>
               <div>
-                <button className="text-button" onClick={() => setManual(s)}>
+                <button
+                  className="text-button"
+                  onClick={() =>
+                    run(async () => setManual(await api(`/spaces/${sid}/sources/${s.id}`)))
+                  }
+                >
                   手动整理
                 </button>
                 <button
@@ -1367,8 +1412,10 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
     [draft, setDraft] = useState(''),
     [sending, setSending] = useState(false),
     [loading, setLoading] = useState(true),
-    [retry, setRetry] = useState(null);
-  const bottom = useRef();
+    [retry, setRetry] = useState(null),
+    [loadingOlder, setLoadingOlder] = useState(false);
+  const bottom = useRef(),
+    preserveScroll = useRef(false);
   async function load(id) {
     setLoading(true);
     try {
@@ -1386,6 +1433,10 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
     else setLoading(false);
   }, []);
   useEffect(() => {
+    if (preserveScroll.current) {
+      preserveScroll.current = false;
+      return;
+    }
     bottom.current?.scrollIntoView({ behavior: 'instant', block: 'nearest' });
   }, [session?.messages.length, sending]);
   async function send(payload) {
@@ -1412,14 +1463,7 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
   }
   async function archiveConversation() {
     try {
-      const content = session.messages
-        .map((m) => `${m.role === 'user' ? '用户' : '星汐'}：${m.body}`)
-        .join('\n\n');
-      await api(`/spaces/${sid}/sources`, 'POST', {
-        title: `对话摘录 · ${session.title}`,
-        body: content,
-        origin: 'conversation',
-      });
+      await api(`/spaces/${sid}/sessions/${session.id}/source`, 'POST', {});
       await reload();
       notify('对话已保存为资料，可到工坊提炼或手动整理。');
     } catch (e) {
@@ -1484,6 +1528,33 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
           )}
         </header>
         <div className="messages">
+          {session?.hasMoreMessages && (
+            <button
+              className="secondary"
+              disabled={loadingOlder || sending}
+              onClick={async () => {
+                setLoadingOlder(true);
+                try {
+                  const older = await api(
+                    `/spaces/${sid}/sessions/${session.id}?before=${session.nextBefore}`,
+                  );
+                  preserveScroll.current = true;
+                  setSession((s) => ({
+                    ...s,
+                    messages: [...older.messages, ...s.messages],
+                    hasMoreMessages: older.hasMoreMessages,
+                    nextBefore: older.nextBefore,
+                  }));
+                } catch (e) {
+                  notify(e.message, true);
+                } finally {
+                  setLoadingOlder(false);
+                }
+              }}
+            >
+              {loadingOlder ? '正在读取…' : '加载较早消息'}
+            </button>
+          )}
           {loading ? (
             <div className="loading">
               <Loader2 className="spin" />

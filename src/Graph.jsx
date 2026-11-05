@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { Minus, Plus, RotateCcw, Orbit, ArrowUpRight } from 'lucide-react';
 import { projectPoint, paintSky } from './star-renderer';
+import { graphSubset } from './graph-layout';
 
 export const kindNames = {
   concept: '概念',
@@ -34,13 +35,13 @@ export default function Graph({ entries, relations, onSelect, selected }) {
     obs.observe(host.current);
     return () => obs.disconnect();
   }, []);
-  const n = entries.length,
+  const { nodes: ordered, edges } = useMemo(
+    () => graphSubset(entries, relations),
+    [entries, relations],
+  );
+  const n = ordered.length,
     rx = Math.min(size.w * 0.34, 320),
     ry = Math.min(size.h * 0.33, 215);
-  const degree = (id) => relations.filter((r) => r.from_id === id || r.to_id === id).length;
-  const ordered = [...entries].sort(
-    (a, b) => degree(b.id) - degree(a.id) || a.created_at.localeCompare(b.created_at),
-  );
   const points = ordered.map((e, i) => {
     const angle = (i / Math.max(n - 1, 1)) * Math.PI * 2 - 0.65;
     const ring = i % 3 === 0 ? 0.63 : 1;
@@ -77,7 +78,7 @@ export default function Graph({ entries, relations, onSelect, selected }) {
             <stop offset="1" stopColor="#8095c2" stopOpacity=".13" />
           </linearGradient>
         </defs>
-        {relations.map((r) => {
+        {edges.map((r) => {
           const a = map.get(r.from_id),
             b = map.get(r.to_id);
           if (!a || !b) return null;
@@ -127,7 +128,9 @@ export default function Graph({ entries, relations, onSelect, selected }) {
       )}
       <div className="graph-bottom">
         <span>
-          <span className="live-dot" /> {n} 颗星 · 点击探索出处 <ArrowUpRight size={13} />
+          <span className="live-dot" /> {n} 颗星
+          {entries.length > n ? ` / 共 ${entries.length} 颗，请筛选查看` : ' · 点击探索出处'}{' '}
+          <ArrowUpRight size={13} />
         </span>
         <div className="graph-controls">
           <button aria-label="缩小星图" onClick={() => setZoom((z) => Math.max(0.55, z - 0.15))}>

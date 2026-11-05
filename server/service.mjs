@@ -106,12 +106,12 @@ export class Service {
   }
   async reply(spaceId, sessionId, { body, clientId }) {
     this.requireKey();
-    const session = this.store.session(spaceId, sessionId);
+    this.store.sessionMeta(spaceId, sessionId);
     clientId = str(clientId, '消息标识', 150);
     body = str(body, '消息', 12000);
-    const existing = session.messages.find((m) => m.client_id === `reply:${clientId}`);
+    const existing = this.store.messageByClient(spaceId, sessionId, `reply:${clientId}`);
     if (existing) {
-      const request = session.messages.find((m) => m.client_id === clientId);
+      const request = this.store.messageByClient(spaceId, sessionId, clientId);
       if (!request || request.body !== body) throw new Fault('消息标识已用于其他内容', 409);
       return { message: existing, session: this.store.session(spaceId, sessionId) };
     }
@@ -120,7 +120,7 @@ export class Service {
     try {
       this.store.append(spaceId, sessionId, { role: 'user', body, clientId });
       const s = this.store.space(spaceId),
-        history = this.store.session(spaceId, sessionId).messages;
+        history = this.store.session(spaceId, sessionId, { limit: 20 }).messages;
       const context = this.store.context(spaceId, body, 6);
       const defaults = this.store
         .context(spaceId, '', 12)

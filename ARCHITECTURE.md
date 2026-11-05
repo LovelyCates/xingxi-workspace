@@ -17,7 +17,7 @@ flowchart LR
 
 `spaces.kind` 为 work / companion。所有源、条目、关系和会话均显式指定 space_id。接口解析空间后，每次对象查询仍检查其空间归属，禁止通过另一空间 ID 引用对象。跨空间引用在写入时也被拒绝。
 
-数据表：spaces、sources、entries、revisions、relations、sessions、messages、jobs。外键开启，WAL 日志模式。每次条目编辑传入 revision；版本不符返回 409。更新前将旧条目写入 revisions，同一事务提交。
+数据表：spaces、sources、entries、revisions、relations、sessions、messages、jobs、entry_terms、migrations。外键开启，WAL 日志模式。每次条目编辑传入 revision；版本不符返回 409。更新前将旧条目写入 revisions，同一事务提交。
 
 来源的正文不可通过服务 API 修改。记忆包含一组 `{sourceId, quote}`，每个 quote 必须是同空间来源原文的连续子串。候选状态 pending，经界面确认成为 accepted；归档为 archived。context_get 只检索 accepted。出处匹配检查提供可追溯性，不能替代对总结正确性的审核。
 
@@ -27,13 +27,15 @@ flowchart LR
 
 ## 会话协议
 
+session_read 默认按 rowid 游标返回最近最多 100 条，使用 nextBefore 继续向前读取。每轮上下文直接查询最近 20 条，追加消息仅校验会话元数据。收为资料由服务端读取完整消息，超过导入长度上限则明确拒绝。
+
 session_create 返回持久 ID；调用者在后续使用相同 ID。session_append 用 `(session_id,client_id)` 唯一约束去重；相同标识不同内容返回 409。
 
 chat_reply 先检查 Key 和会话，再保存用户消息，生成回答后写入 `reply:{clientId}`。失败保留用户消息，重试复用标识。单会话进程内锁防止重叠生成；重复成功请求直接返回原答案。来源和会话内容以数据引用方式放入模型上下文，不授予执行工具权限。
 
 ## 检索
 
-英文单词/数字与中文连续文本的双字组构成查询项。标题匹配得 3 分，正文 1 分；无匹配则不召回，不伪造相关结果。空查询返回最近已确认条目。对话额外加入当前空间最近确认的 preference/agreement，最多合并 8 条。最多保留最近 20 条消息，总字符预算约 20,000。当前实现没有 embedding 与长期滚动摘要。
+英文完整单词/数字与中文连续文本的双字组构成查询项，单字查询使用单字索引。`entry_terms` 是可重建的持久倒排索引，确认、编辑、归档时在同一事务内维护。标题匹配得 3 分，正文 1 分；无匹配则不召回，不伪造相关结果。空查询返回最近已确认条目。对话额外加入当前空间最近确认的 preference/agreement，最多合并 8 条。最多保留最近 20 条消息，总字符预算约 20,000。当前实现没有 embedding 与长期滚动摘要。
 
 ## 入口与认证
 

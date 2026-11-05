@@ -4,6 +4,8 @@
 
 > **派生说明**：本项目的星点纹理和透视投影代码派生自 [星汐 dsh-xingxi](https://github.com/Yuuyuko-uu/dsh-xingxi)，原作者 **Yuuyuko-uu**，Copyright (c) 2026。星汐新增了独立 React 界面、工作/陪伴空间、SQLite 数据层、资料提炼与审阅、持久会话及 MCP 服务。完整发行版遵循 **Yuuyuko-uu 插件许可 1.1**，见 [LICENSE](LICENSE)、[NOTICE](NOTICE)；该自定义许可不应表述为 MIT 或其他 OSI 标准开源许可。
 
+![星汐 PC 星图预览](docs/preview.png)
+
 ## 启动
 
 需要 Node.js **22.13+**（推荐 Node 24 LTS）及 npm。首次安装需要网络。
@@ -76,7 +78,7 @@ npm start
 | `session_append`                  | 保存真实对话消息，不调用模型       |
 | `chat_reply`                      | 由星汐的模型生成回答并写入同一会话 |
 
-`chat_reply` 和 `wiki_compile` 会消耗用户 DeepSeek API 额度。其他工具不调用大模型。`clientId` 是调用方生成的唯一消息标识；重试复用它，可以避免重复写入。继续对话必须复用 `sessionId`。`spaceId` 是数据作用域，并非多用户权限边界；持有本机令牌的 Agent 可以访问所有空间，应只连接可信客户端。
+`chat_reply` 和 `wiki_compile` 会消耗用户 DeepSeek API 额度。其他工具不调用大模型。`session_read` 默认读取最新 100 条消息，若 `hasMoreMessages` 为 true，可传 `nextBefore` 作为 `before` 继续读取。`clientId` 是调用方生成的唯一消息标识；重试复用它，可以避免重复写入。继续对话必须复用 `sessionId`。`spaceId` 是数据作用域，并非多用户权限边界；持有本机令牌的 Agent 可以访问所有空间，应只连接可信客户端。
 
 配套技能位于 [`skills/xingxi/SKILL.md`](skills/xingxi/SKILL.md)，可复制到目标 Agent 支持的技能目录。两种模式：
 
@@ -118,15 +120,17 @@ npm run format:check
 
 React + Vite 前端，Node 原生 HTTP + SQLite 服务，官方 TypeScript MCP SDK 的 JavaScript ESM 接口。测试包括：命名空间隔离、证据校验、修订冲突、会话重试幂等、编译任务原子回滚、Key 不回显、实际 HTTP 认证、真实 stdio MCP 握手与读写。模型单元测试使用可控替身，不消耗真实 API 额度；真实模型联调需配置 Key。
 
+性能改动、5000 条记忆 / 10000 条消息的可复现合成基准和适用边界见 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)。
+
 设计依据、令牌与验收记录见 [`design/`](design/)。接口与数据设计见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
 
 ## 首版边界与后续方向
 
-- 检索为关键词 + 中文双字匹配，尚未接入 embedding / 向量检索；图关系由用户建立，不冒充自动发现的因果关系。
+- 检索为带持久倒排索引的英文词 + 中文单字/双字匹配，尚未接入 embedding / 向量检索；图关系由用户建立，不冒充自动发现的因果关系。
 - 提炼一次最多 30,000 字符、8 条候选；长资料暂需分段导入。没有 PDF/OCR、网页抓取、仓库自动监控或大规模分片任务。
 - 历史版本可查看；没有语义冲突自动检测、批量合并、版本回滚按钮或完整的时间有效性推断。
 - 会话使用最近最多 20 条、约 20,000 字符的消息上下文，另加有限的记忆片段；超长会话尚无自动递归摘要。不会承诺「永远记得所有聊天」。
-- UI 为首版可用布局，复杂星图在大量节点时仍需聚类、避让和按需展开。
+- UI 为首版可用布局，星图每次最多显示 160 个节点与 500 条边，星册分批显示；复杂星图仍需聚类、避让和按需展开。
 - 下一步优先：根据实际资料检索效果增加混合检索，加入有证据的冲突审阅，再完善对话话题状态与用户可控的主动交流。
 
 发布 GitHub 前只提交源码、锁文件和文档，不提交 `.local/`、Key、个人资料或 `node_modules/`。请保留本 README 首屏派生声明、LICENSE、NOTICE 与代码署名。
