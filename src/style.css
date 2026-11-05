@@ -2648,3 +2648,13 @@ select {
 .memory-excerpt p {
   white-space: pre-wrap;
 }
+
+.page-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 18px;
+  margin: 20px 0;
+  color: var(--muted);
+  font-size: 12px;
+}

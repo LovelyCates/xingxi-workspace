@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { searchTerms } from './search.mjs';
 import { ConversationMemory } from './conversation-memory.mjs';
+import { WorkspaceViews } from './workspace-views.mjs';
 
 export class Fault extends Error {
   constructor(message, status = 400) {
@@ -56,8 +57,10 @@ export class Store {
       });
     }
     this.conversations = new ConversationMemory(this);
+    this.views = new WorkspaceViews(this);
   }
   indexEntry(entry) {
+    this.views?.index(entry);
     this.db.prepare('DELETE FROM entry_terms WHERE entry_id=?').run(entry.id);
     if (entry.status !== 'accepted') return;
     const weights = new Map(searchTerms(entry.body, true).map((term) => [term, 1]));
@@ -70,14 +73,19 @@ export class Store {
     this.db.close();
   }
   transaction(fn) {
-    this.db.exec('BEGIN IMMEDIATE');
+    const depth = this.transactionDepth || 0;
+    const savepoint = `nested_${depth}`;
+    this.db.exec(depth ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+    this.transactionDepth = depth + 1;
     try {
       const result = fn();
-      this.db.exec('COMMIT');
+      this.db.exec(depth ? `RELEASE ${savepoint}` : 'COMMIT');
       return result;
     } catch (e) {
-      this.db.exec('ROLLBACK');
+      this.db.exec(depth ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK');
       throw e;
+    } finally {
+      this.transactionDepth = depth;
     }
   }
   spaces() {
@@ -159,21 +167,25 @@ export class Store {
     if (!kinds.includes(kind)) throw new Fault('记忆类型无效');
     const id = uid();
     const stamp = now();
-    this.db
-      .prepare('INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?)')
-      .run(
-        id,
-        spaceId,
-        str(input.title, '标题', 160),
-        str(input.body, '内容'),
-        kind,
-        'pending',
-        JSON.stringify(evidence),
-        1,
-        stamp,
-        stamp,
-      );
-    return this.entry(spaceId, id);
+    return this.transaction(() => {
+      this.db
+        .prepare('INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?)')
+        .run(
+          id,
+          spaceId,
+          str(input.title, '标题', 160),
+          str(input.body, '内容'),
+          kind,
+          'pending',
+          JSON.stringify(evidence),
+          1,
+          stamp,
+          stamp,
+        );
+      const entry = this.entry(spaceId, id);
+      this.views.index(entry);
+      return entry;
+    });
   }
   entry(spaceId, id) {
     this.space(spaceId);

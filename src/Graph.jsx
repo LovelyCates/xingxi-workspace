@@ -19,7 +19,7 @@ export const kindColors = {
   experience: '#f0b4bf',
   agreement: '#a8cbdc',
 };
-export default function Graph({ entries, relations, onSelect, selected }) {
+export default function Graph({ entries, relations, onSelect, selected, paged = false }) {
   const host = useRef(),
     sky = useRef();
   const [size, setSize] = useState({ w: 900, h: 600 }),
@@ -129,7 +129,11 @@ export default function Graph({ entries, relations, onSelect, selected }) {
       <div className="graph-bottom">
         <span>
           <span className="live-dot" /> {n} 颗星
-          {entries.length > n ? ` / 共 ${entries.length} 颗，请筛选查看` : ' · 点击探索出处'}{' '}
+          {paged
+            ? ' · 当前分页，可翻页或按关键词筛选'
+            : entries.length > n
+              ? ` / 共 ${entries.length} 颗，请筛选查看`
+              : ' · 点击探索出处'}{' '}
           <ArrowUpRight size={13} />
         </span>
         <div className="graph-controls">

@@ -122,6 +122,26 @@ test('真实 HTTP 与 stdio MCP：认证、跨站拒绝、命名空间、入库�
     evidence: [{ sourceId: source.id, quote: '本机优先运行。' }],
   });
   assert.equal(good.status, 'pending');
+  const view = await (
+    await fetch(`${base}/api/spaces/${a.id}/view?view=book&filter=pending`, { headers })
+  ).json();
+  assert.equal(view.entries[0].id, good.id);
+  assert.equal(view.entries[0].body, undefined);
+  assert.equal(view.counts.pending, 1);
+  const detail = await (
+    await fetch(`${base}/api/spaces/${a.id}/entries/${good.id}/detail`, { headers })
+  ).json();
+  assert.equal(detail.body, good.body);
+  assert.equal(detail.sourceSummaries[0].id, source.id);
+  assert.equal(
+    (await fetch(`${base}/api/spaces/${b.id}/entries/${good.id}/detail`, { headers })).status,
+    404,
+  );
+  assert.equal(
+    (await fetch(`${base}/api/spaces/${a.id}/view?view=book&after=malformed`, { headers })).status,
+    400,
+  );
+
   assert.equal((await call('context_get', { spaceId: a.id, query: '本机' })).entries.length, 0);
   const s = await call('session_create', { spaceId: a.id, title: 'Agent 对话' });
   await call('session_append', {

@@ -154,18 +154,67 @@ function App() {
     [filter, setFilter] = useState('all'),
     [settings, setSettings] = useState(null),
     [modal, setModal] = useState(null),
+    [editEntry, setEditEntry] = useState(null),
     [notice, setNotice] = useState(null),
     [busy, setBusy] = useState(false),
     [initialError, setInitialError] = useState(''),
-    [bookLimit, setBookLimit] = useState(60);
-  useEffect(() => setBookLimit(60), [sid, query, filter]);
+    [loadedEntry, setEntry] = useState(null),
+    [searchQuery, setSearchQuery] = useState(''),
+    [cursorTrail, setCursorTrail] = useState([null]),
+    [viewLoading, setViewLoading] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(query), 250);
+    return () => clearTimeout(timer);
+  }, [query]);
+  useEffect(() => {
+    setCursorTrail([null]);
+  }, [sid, tab, searchQuery, filter]);
+  useEffect(() => {
+    setQuery('');
+    setSearchQuery('');
+  }, [tab]);
+  const pageHeading = useRef(null);
+  const viewRequest = useRef(null),
+    requestSequence = useRef(0);
+  viewRequest.current = {
+    sid,
+    view: tab,
+    q: ['graph', 'book', 'workshop'].includes(tab) ? searchQuery : '',
+    filter,
+    after: cursorTrail.at(-1),
+  };
   const currentSid = useRef(sid);
   currentSid.current = sid;
   const notify = (text, error = false) => setNotice({ text, error });
   const reload = async (spaceId = sid) => {
-    const s = await api(`/spaces/${spaceId}`);
-    if (currentSid.current === spaceId) setSnap(s);
-    return s;
+    if (!spaceId || currentSid.current !== spaceId) return null;
+    const request = { ...viewRequest.current },
+      sequence = ++requestSequence.current;
+    const params = new URLSearchParams({
+      view: request.view,
+      q: request.q,
+      filter: request.filter,
+    });
+    if (request.after) params.set('after', request.after);
+    setViewLoading(true);
+    try {
+      const data = await api(`/spaces/${spaceId}/view?${params}`);
+      if (
+        sequence === requestSequence.current &&
+        JSON.stringify(viewRequest.current) === JSON.stringify(request)
+      )
+        setSnap(data);
+      return data;
+    } catch (error) {
+      if (
+        sequence === requestSequence.current &&
+        JSON.stringify(viewRequest.current) === JSON.stringify(request)
+      )
+        throw error;
+      return null;
+    } finally {
+      if (sequence === requestSequence.current) setViewLoading(false);
+    }
   };
   useEffect(() => {
     Promise.all([api('/spaces'), api('/settings')])
@@ -180,11 +229,33 @@ function App() {
     if (sid) {
       setSnap(null);
       setSelected(null);
+      setModal(null);
       setQuery('');
       setFilter('all');
-      reload(sid).catch((e) => notify(e.message, true));
+      setSearchQuery('');
     }
   }, [sid]);
+  useEffect(() => {
+    if (!sid) return;
+    reload(sid).catch((e) => {
+      if (currentSid.current === sid) notify(e.message, true);
+    });
+  }, [sid, tab, searchQuery, filter, cursorTrail.at(-1)]);
+  useEffect(() => {
+    let cancelled = false;
+    if (selected && snap?.space.id === sid) {
+      api(`/spaces/${sid}/entries/${selected}/detail`)
+        .then((detail) => {
+          if (!cancelled) setEntry(detail);
+        })
+        .catch((e) => {
+          if (!cancelled) notify(e.message, true);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [sid, selected, snap]);
   const activeJob = snap?.jobs.some((j) => ['queued', 'running'].includes(j.status));
   useEffect(() => {
     if (!activeJob) return;
@@ -232,21 +303,46 @@ function App() {
       notify(patch.status === 'accepted' ? '已确认，这条记忆现在可以被检索。' : '已保存修改。');
     });
   }
+  const entry = loadedEntry?.id === selected && loadedEntry?.space_id === sid ? loadedEntry : null;
   const space = snap?.space,
     all = snap?.entries || [],
-    accepted = all.filter((e) => e.status === 'accepted'),
-    pending = all.filter((e) => e.status === 'pending');
-  const visible = all.filter(
-    (e) =>
-      (filter === 'pending'
-        ? e.status === 'pending'
-        : filter === 'archived'
-          ? e.status === 'archived'
-          : e.status === 'accepted') &&
-      (filter === 'all' || ['pending', 'archived'].includes(filter) || e.kind === filter) &&
-      `${e.title} ${e.body}`.toLowerCase().includes(query.toLowerCase()),
+    counts = snap?.counts || { accepted: 0, pending: 0, relations: 0, sources: 0, kinds: [] },
+    visible = all;
+  const currentPage =
+    snap?.pages?.[
+      {
+        graph: 'entries',
+        book: 'entries',
+        workshop: 'sources',
+        chat: 'sessions',
+        timeline: 'events',
+      }[tab]
+    ];
+  const pagination = (currentPage?.hasMore || cursorTrail.length > 1) && (
+    <div className="page-controls">
+      <button
+        className="secondary"
+        disabled={viewLoading || cursorTrail.length < 2}
+        onClick={() => {
+          setCursorTrail((c) => c.slice(0, -1));
+          pageHeading.current?.scrollIntoView({ block: 'start' });
+        }}
+      >
+        上一页
+      </button>
+      <span>第 {cursorTrail.length} 页 · 按需读取</span>
+      <button
+        className="secondary"
+        disabled={viewLoading || !currentPage?.hasMore}
+        onClick={() => {
+          setCursorTrail((c) => [...c, currentPage.nextCursor]);
+          pageHeading.current?.scrollIntoView({ block: 'start' });
+        }}
+      >
+        下一页
+      </button>
+    </div>
   );
-  const entry = all.find((e) => e.id === selected);
   if (initialError)
     return (
       <main className="startup">
@@ -309,8 +405,8 @@ function App() {
             >
               <Icon size={19} />
               <span>{label}</span>
-              {key === 'book' && pending.length > 0 ? (
-                <em>{pending.length}</em>
+              {key === 'book' && counts.pending > 0 ? (
+                <em>{counts.pending}</em>
               ) : tab === key ? (
                 <ChevronRight size={14} />
               ) : null}
@@ -358,7 +454,7 @@ function App() {
             <span className="avatar">汐</span>
           </div>
         </header>
-        {!snap ? (
+        {!snap || snap.space.id !== sid || snap.view !== tab ? (
           <div className="loading">
             <Loader2 className="spin" /> 正在点亮你的星空…
           </div>
@@ -383,7 +479,7 @@ function App() {
                 <Download size={16} />
               </button>
             </div>
-            <section className="page-heading">
+            <section className="page-heading" ref={pageHeading}>
               <div>
                 <div className="eyebrow">
                   {space.kind === 'companion'
@@ -428,17 +524,17 @@ function App() {
                 <span className="metric-icon">
                   <Sparkles size={17} />
                 </span>
-                <strong>{accepted.length}</strong>
+                <strong>{counts.accepted}</strong>
                 <span>已确认记忆</span>
               </div>
               <div>
                 <GitBranch size={17} />
-                <strong>{snap.relations.length}</strong>
+                <strong>{counts.relations}</strong>
                 <span>条思路连接</span>
               </div>
               <div>
                 <FileText size={17} />
-                <strong>{snap.sources.length}</strong>
+                <strong>{counts.sources}</strong>
                 <span>份原始资料</span>
               </div>
               <button
@@ -448,9 +544,9 @@ function App() {
                 }}
               >
                 <Clock size={16} />
-                <strong>{pending.length}</strong>
+                <strong>{counts.pending}</strong>
                 <span>条等待确认</span>
-                {pending.length > 0 && <ArrowUpRight size={14} />}
+                {counts.pending > 0 && <ArrowUpRight size={14} />}
               </button>
             </div>
             {['graph', 'book'].includes(tab) && (
@@ -462,7 +558,7 @@ function App() {
                   >
                     全部星光
                   </button>
-                  {[...new Set(accepted.map((e) => e.kind))].map((k) => (
+                  {counts.kinds.map((k) => (
                     <button
                       className={filter === k ? 'active' : ''}
                       onClick={() => setFilter(k)}
@@ -496,6 +592,7 @@ function App() {
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="寻找一个想法…"
                     aria-label="搜索记忆"
+                    maxLength={2000}
                   />
                   <kbd>⌕</kbd>
                 </label>
@@ -505,6 +602,7 @@ function App() {
               <div className={`graph-layout ${entry ? 'with-detail' : ''}`}>
                 <div className="graph-card">
                   <Graph
+                    paged={currentPage?.hasMore || cursorTrail.length > 1}
                     entries={visible}
                     relations={snap.relations}
                     onSelect={(e) => setSelected(e.id)}
@@ -514,18 +612,24 @@ function App() {
                     <span>
                       <Layers size={14} /> {space.name}
                     </span>
-                    <span>只展示当前空间的记忆与连接</span>
+                    <span>
+                      {snap.graphEdgesTruncated
+                        ? '本组连接较多，展示前 500 条；可筛选缩小范围'
+                        : '只展示当前空间的记忆与连接'}
+                    </span>
                   </div>
                 </div>
                 {entry && (
                   <EntryDetail
                     entry={entry}
-                    sources={snap.sources}
-                    relations={snap.relations}
-                    entries={all}
+                    sources={entry.sourceSummaries}
+                    links={entry.links}
                     sid={sid}
                     onClose={() => setSelected(null)}
-                    onEdit={() => setModal('edit')}
+                    onEdit={() => {
+                      setEditEntry(entry);
+                      setModal('edit');
+                    }}
                     onUpdate={updateEntry}
                     onReload={reload}
                     busy={busy}
@@ -537,7 +641,7 @@ function App() {
             {tab === 'book' && (
               <div className={`book-layout ${entry ? 'with-detail' : ''}`}>
                 <div className="entry-grid">
-                  {visible.slice(0, bookLimit).map((e) => (
+                  {visible.map((e) => (
                     <button
                       className={`entry-card ${selected === e.id ? 'chosen' : ''}`}
                       onClick={() => setSelected(e.id)}
@@ -548,21 +652,16 @@ function App() {
                         <ArrowUpRight size={15} />
                       </div>
                       <h3>{e.title}</h3>
-                      <p>{e.body}</p>
+                      <p>{e.preview}</p>
                       <footer>
                         <span>
                           <Link2 size={12} />
-                          {e.evidence.length} 个出处
+                          {e.evidence_count} 个出处
                         </span>
                         <span>{date(e.updated_at)}</span>
                       </footer>
                     </button>
                   ))}
-                  {visible.length > bookLimit && (
-                    <button className="secondary" onClick={() => setBookLimit((n) => n + 60)}>
-                      再显示 60 条（已显示 {bookLimit} / {visible.length}）
-                    </button>
-                  )}
                   {!visible.length && (
                     <Empty title="这里还留着空白">导入资料，或切换筛选条件，寻找下一颗星。</Empty>
                   )}
@@ -570,12 +669,14 @@ function App() {
                 {entry && (
                   <EntryDetail
                     entry={entry}
-                    sources={snap.sources}
-                    relations={snap.relations}
-                    entries={all}
+                    sources={entry.sourceSummaries}
+                    links={entry.links}
                     sid={sid}
                     onClose={() => setSelected(null)}
-                    onEdit={() => setModal('edit')}
+                    onEdit={() => {
+                      setEditEntry(entry);
+                      setModal('edit');
+                    }}
                     onUpdate={updateEntry}
                     onReload={reload}
                     busy={busy}
@@ -596,6 +697,8 @@ function App() {
             )}
             {tab === 'workshop' && (
               <Workshop
+                query={query}
+                setQuery={setQuery}
                 snap={snap}
                 settings={settings}
                 setSettings={setSettings}
@@ -622,6 +725,12 @@ function App() {
                 onSettings={() => setTab('workshop')}
               />
             )}
+            {viewLoading && (
+              <p role="status" className="form-note">
+                正在读取当前页…
+              </p>
+            )}
+            {pagination}
             <footer className="page-footer">
               <span>
                 XINGXI <i>·</i> 思绪有迹，日常有光。
@@ -694,16 +803,16 @@ function App() {
           }}
         />
       )}
-      {modal === 'edit' && entry && (
+      {modal === 'edit' && editEntry && (
         <Modal title="编辑这颗星" onClose={() => setModal(null)}>
           <form
             onSubmit={(e) => {
               e.preventDefault();
               const f = Object.fromEntries(new FormData(e.currentTarget));
               run(async () => {
-                await api(`/spaces/${sid}/entries/${entry.id}`, 'PATCH', {
+                await api(`/spaces/${sid}/entries/${editEntry.id}`, 'PATCH', {
                   ...f,
-                  revision: entry.revision,
+                  revision: editEntry.revision,
                 });
                 await reload();
                 setModal(null);
@@ -713,14 +822,14 @@ function App() {
           >
             <label>
               标题
-              <input name="title" defaultValue={entry.title} required maxLength={160} />
+              <input name="title" defaultValue={editEntry.title} required maxLength={160} />
             </label>
             <label>
               正文
               <textarea
                 className="large-input"
                 name="body"
-                defaultValue={entry.body}
+                defaultValue={editEntry.body}
                 required
                 maxLength={20000}
               />
@@ -739,8 +848,7 @@ function App() {
 function EntryDetail({
   entry: e,
   sources,
-  relations,
-  entries,
+  links,
   sid,
   onClose,
   onEdit,
@@ -752,7 +860,32 @@ function EntryDetail({
   const [history, setHistory] = useState(null),
     [source, setSource] = useState(null),
     [relate, setRelate] = useState(false),
-    [relBusy, setRelBusy] = useState(false);
+    [relBusy, setRelBusy] = useState(false),
+    [neighbors, setNeighbors] = useState(links),
+    [picker, setPicker] = useState({ items: [], hasMore: false }),
+    [pickerQuery, setPickerQuery] = useState(''),
+    [pickerBusy, setPickerBusy] = useState(false);
+  useEffect(() => setNeighbors(links), [links]);
+  useEffect(() => {
+    if (!relate) return;
+    setPickerBusy(true);
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setPickerBusy(true);
+      try {
+        const result = await api(`/spaces/${sid}/entries?q=${encodeURIComponent(pickerQuery)}`);
+        if (!cancelled) setPicker(result);
+      } catch (error) {
+        if (!cancelled) notify(error.message, true);
+      } finally {
+        if (!cancelled) setPickerBusy(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [relate, pickerQuery, sid]);
   useEffect(() => {
     setHistory(null);
     setSource(null);
@@ -786,7 +919,7 @@ function EntryDetail({
             key={i}
             onClick={async () => {
               try {
-                setSource(await api(`/spaces/${sid}/sources/${s.id}`));
+                setSource(await api(`/spaces/${sid}/sources/${ev.sourceId}`));
               } catch (err) {
                 notify(err.message, true);
               }
@@ -805,14 +938,33 @@ function EntryDetail({
         相邻的想法
       </div>
       <div className="related-list">
-        {relations
-          .filter((r) => r.from_id === e.id || r.to_id === e.id)
-          .map((r) => (
-            <div key={r.id}>
-              <span>{r.label}</span>
-              {entries.find((x) => x.id === (r.from_id === e.id ? r.to_id : r.from_id))?.title}
-            </div>
-          ))}
+        {neighbors.items.map((r) => (
+          <div key={r.id}>
+            <span>{r.label}</span>
+            {r.neighbor_title}
+          </div>
+        ))}
+        {neighbors.hasMore && (
+          <button
+            className="text-button"
+            disabled={relBusy}
+            onClick={async () => {
+              setRelBusy(true);
+              try {
+                const next = await api(
+                  `/spaces/${sid}/entries/${e.id}/neighbors?after=${encodeURIComponent(neighbors.nextCursor)}`,
+                );
+                setNeighbors((n) => ({ ...next, items: [...n.items, ...next.items] }));
+              } catch (error) {
+                notify(error.message, true);
+              } finally {
+                setRelBusy(false);
+              }
+            }}
+          >
+            加载更多连接
+          </button>
+        )}
         <button className="text-button" onClick={() => setRelate(true)}>
           <Plus size={13} />
           添加连接
@@ -906,9 +1058,18 @@ function EntryDetail({
               <input name="label" placeholder="例如：支持、依赖、修正" required maxLength={30} />
             </label>
             <label>
+              搜索要连接的知识
+              <input
+                value={pickerQuery}
+                maxLength={2000}
+                onChange={(event) => setPickerQuery(event.target.value)}
+                placeholder="标题或正文关键词"
+              />
+            </label>
+            <label>
               连接到
-              <select name="toId">
-                {entries
+              <select name="toId" required disabled={pickerBusy}>
+                {picker.items
                   .filter((x) => x.id !== e.id && x.status === 'accepted')
                   .map((x) => (
                     <option key={x.id} value={x.id}>
@@ -917,10 +1078,34 @@ function EntryDetail({
                   ))}
               </select>
             </label>
+            {picker.hasMore && (
+              <button
+                className="text-button"
+                type="button"
+                disabled={pickerBusy}
+                onClick={async () => {
+                  setPickerBusy(true);
+                  try {
+                    setPicker(
+                      await api(
+                        `/spaces/${sid}/entries?q=${encodeURIComponent(pickerQuery)}&after=${encodeURIComponent(picker.nextCursor)}`,
+                      ),
+                    );
+                  } catch (error) {
+                    notify(error.message, true);
+                  } finally {
+                    setPickerBusy(false);
+                  }
+                }}
+              >
+                下一组可连接的知识
+              </button>
+            )}
             <button
               disabled={
                 relBusy ||
-                entries.filter((x) => x.id !== e.id && x.status === 'accepted').length === 0
+                pickerBusy ||
+                picker.items.filter((x) => x.id !== e.id && x.status === 'accepted').length === 0
               }
               className="primary full"
             >
@@ -1011,31 +1196,23 @@ function ImportModal({ sid, onClose, onSave }) {
 }
 
 function Timeline({ snap, onSelect }) {
-  const events = [
-    ...snap.sources.map((s) => ({
-      id: s.id,
-      date: s.created_at,
-      type: 'source',
-      title: s.title,
-      subtitle: '收下了一份原始资料',
-      item: s,
-    })),
-    ...snap.entries.map((e) => ({
-      id: e.id,
-      date: e.updated_at,
-      type: 'entry',
-      title: e.title,
-      subtitle: e.revision > 1 ? `记忆已更新至版本 ${e.revision}` : '一颗新的记忆',
-      item: e,
-    })),
-  ].sort((a, b) => b.date.localeCompare(a.date));
+  const events = snap.events.map((event) => ({
+    ...event,
+    item: { ...event, id: event.item_id },
+    subtitle:
+      event.type === 'source'
+        ? '收下了一份原始资料'
+        : event.revision > 1
+          ? `记忆已更新至版本 ${event.revision}`
+          : '一颗新的记忆',
+  }));
   return (
     <div className="timeline-layout">
       <section className="timeline">
         <div className="timeline-title">
           <CalendarDays size={18} />
           <h2>那些思绪留下的轨迹</h2>
-          <span>{events.length} 个时刻</span>
+          <span>本页 {events.length} 个时刻</span>
         </div>
         {!events.length && (
           <Empty title="故事从这里开始">收下第一份资料，就会留下时间的印记。</Empty>
@@ -1082,7 +1259,19 @@ function Timeline({ snap, onSelect }) {
   );
 }
 
-function Workshop({ snap, settings, setSettings, reload, run, busy, notify, onImport, onReview }) {
+function Workshop({
+  query,
+  setQuery,
+  snap,
+  settings,
+  setSettings,
+  reload,
+  run,
+  busy,
+  notify,
+  onImport,
+  onReview,
+}) {
   const [manual, setManual] = useState(null),
     [sourceView, setSourceView] = useState(null),
     [key, setKey] = useState('');
@@ -1110,8 +1299,21 @@ function Workshop({ snap, settings, setSettings, reload, run, busy, notify, onIm
           </button>
         </div>
         <p className="panel-desc">资料 → 提炼候选 → 你来确认 → 加入记忆</p>
+        <label>
+          按标题查找资料
+          <input
+            value={query}
+            maxLength={2000}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索整个空间的资料标题"
+          />
+        </label>
         {!snap.sources.length && (
-          <Empty title="还没有资料">一段文字、一份笔记，都可以作为起点。</Empty>
+          <Empty title={snap.counts.sources ? '没有匹配的资料' : '还没有资料'}>
+            {snap.counts.sources
+              ? '试试其他标题关键词，或清空搜索。'
+              : '一段文字、一份笔记，都可以作为起点。'}
+          </Empty>
         )}
         <div className="source-list">
           {snap.sources.map((s) => (
@@ -1168,7 +1370,7 @@ function Workshop({ snap, settings, setSettings, reload, run, busy, notify, onIm
         <div className="candidate-banner">
           <span>
             <Layers size={18} />
-            {snap.entries.filter((e) => e.status === 'pending').length} 条候选等待你的确认
+            {snap.counts.pending} 条候选等待你的确认
           </span>
           <button onClick={onReview}>
             去看看 <ArrowRight size={14} />
@@ -1179,7 +1381,7 @@ function Workshop({ snap, settings, setSettings, reload, run, busy, notify, onIm
             {snap.jobs.slice(0, 4).map((j) => (
               <div key={j.id}>
                 <span className={`job-dot ${j.status}`} />
-                <span>{snap.sources.find((s) => s.id === j.source_id)?.title}</span>
+                <span>{j.source_title}</span>
                 <strong>
                   {
                     { queued: '等待中', running: '提炼中', done: '已完成', failed: '未完成' }[
@@ -1441,13 +1643,14 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
       localStorage.setItem(`xingxi.session.${sid}`, id);
     } catch (e) {
       notify(e.message, true);
+      localStorage.removeItem(`xingxi.session.${sid}`);
     } finally {
       setLoading(false);
     }
   }
   useEffect(() => {
     const saved = localStorage.getItem(`xingxi.session.${sid}`);
-    const id = snap.sessions.find((s) => s.id === saved)?.id || snap.sessions[0]?.id;
+    const id = saved || snap.sessions[0]?.id;
     if (id) load(id);
     else setLoading(false);
   }, []);

@@ -17,7 +17,7 @@ flowchart LR
 
 `spaces.kind` 为 work / companion。所有源、条目、关系和会话均显式指定 space_id。接口解析空间后，每次对象查询仍检查其空间归属，禁止通过另一空间 ID 引用对象。跨空间引用在写入时也被拒绝。
 
-数据表：spaces、sources、entries、revisions、relations、sessions、messages、jobs、entry_terms、migrations、space_memory、session_memory、session_bindings，以及 FTS5 conversation_search。外键开启，WAL 日志模式。每次条目编辑传入 revision；版本不符返回 409。更新前将旧条目写入 revisions，同一事务提交。
+数据表：spaces、sources、entries、revisions、relations、sessions、messages、jobs、entry_terms、migrations、space_memory、session_memory、session_bindings，以及 FTS5 conversation_search、catalog_search、稳定目录映射 catalog_docs 和来源字数缓存 source_metrics。外键开启，WAL 日志模式。每次条目编辑传入 revision；版本不符返回 409。更新前将旧条目写入 revisions，同一事务提交。
 
 来源的正文不可通过服务 API 修改。记忆包含一组 `{sourceId, quote}`，每个 quote 必须是同空间来源原文的连续子串。候选状态 pending，经界面确认成为 accepted；归档为 archived。context_get 只检索 accepted。出处匹配检查提供可追溯性，不能替代对总结正确性的审核。
 
@@ -41,6 +41,16 @@ chat_reply 先检查 Key 和会话，再保存用户消息，生成回答后写�
 
 `session_open` 用 `(space_id,binding)` 唯一约束恢复会话，绑定和新会话创建在同一事务。删除会话会清除关联绑定；已有手动资料快照保留。模型回复期间拒绝删除会话。`session_list` 采用 rowid 游标每页最多 100 条。
 
+## 按需页面与目录全文索引
+
+`GET /api/spaces/:sid/view?view=graph|book|timeline|workshop|chat` 为网页入口，不调用旧的完整 snapshot。每页分别限制 160 个节点/500 条边、60 条知识摘要、40 个时间事件、50 份来源元数据、50 个会话。知识摘要只含最多 240 字符 preview 和证据数量；完整正文、证据、来源标题与邻居通过 `/entries/:id/detail` 读取。相邻关系每批 50 条，可继续分页。
+
+目录索引 catalog_search 覆盖所有状态的标题与正文，使用多词 AND 匹配；查询复核空间和状态，不改变模型只召回 accepted 知识的约束。catalog_docs 为每条知识提供独立整数文档 ID，避免依赖 entries 的隐式 rowid。新增、修订与索引更新在同一事务中，嵌套操作使用 SAVEPOINT，兼容整个提炼任务的回滚。
+
+知识与来源采用时间和 UUID 的复合游标；星历分别从两个有序索引各取最多 41 条元数据，再合并成 40 条。同一时间戳仍按 ID 稳定翻页；正在变化的数据可能移入更新页面，不是审计快照。
+
+全空间计数使用覆盖索引。来源字符数在写入时由数据库触发器更新到 source_metrics，浏览时不再重复对长正文执行 length()。前端搜索延迟 250 ms，过期请求不会覆盖新空间、页面或筛选；编辑弹窗保存打开时的 revision，后台刷新不能放宽并发冲突检查。
+
 ## 入口与认证
 
 默认 HTTP 绑定 127.0.0.1:4180。访问首页写入 HttpOnly / SameSite Strict cookie；API 可用该 cookie 或 Bearer token。未知 Host、跨域 Origin 和 cross-site 请求被拒绝，无宽松 CORS。MCP 从本机配置目录读取访问令牌，只支持 localhost / 127.0.0.1 HTTP。令牌持有者拥有整个本机实例权限；这是单用户软件，不是多租户服务。
@@ -61,7 +71,7 @@ chat_reply 先检查 Key 和会话，再保存用户消息，生成回答后写�
 
 尚待完成的目标项（不能据当前测试宣称“完美版本”）：
 
-- 大空间的完整快照仍包含全部条目正文与关系，需按页面拆分摘要与分页，避免加载量随知识总量线性增长。
+- 已完成：网页使用按页面摘要与分页接口，完整正文只在点击时读取；兼容完整快照仅保留作旧接口、诊断和导出使用。
 - 长会话的主题与助手方案仍缺乏有出处的滚动摘要；现有自动记忆为用户原话召回，不能代替全历史理解。
 - 记忆冲突、时间变更和用户纠正需要可审阅的统一管理；当前仅保留原话时间并提示模型优先当前纠正。
 - 持久化每轮引用证据与更完整的备份/恢复体验，以及针对上述变化的性能、外发边界和真实模型回归。

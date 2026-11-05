@@ -93,6 +93,12 @@ const server = createServer(async (req, res) => {
       const sid = m[1],
         tail = m[2] || '';
       store.space(sid);
+      if (tail === 'view' && method === 'GET')
+        return json(res, store.views.read(sid, Object.fromEntries(url.searchParams)));
+      if (tail === 'entries' && method === 'GET')
+        return json(res, store.views.entries(sid, Object.fromEntries(url.searchParams)));
+      if (tail === 'sources' && method === 'GET')
+        return json(res, store.views.sources(sid, Object.fromEntries(url.searchParams)));
       if (!tail && method === 'GET') return json(res, store.snapshot(sid));
       if (!tail && method === 'PATCH') return json(res, store.updateSpace(sid, b));
       if (tail === 'context' && method === 'GET')
@@ -123,6 +129,13 @@ const server = createServer(async (req, res) => {
         id = parts[1];
       if (parts[0] === 'sources' && id && method === 'GET') return json(res, store.source(sid, id));
       if (parts[0] === 'entries' && id) {
+        if (parts[2] === 'detail' && method === 'GET')
+          return json(res, store.views.detail(sid, id));
+        if (parts[2] === 'neighbors' && method === 'GET')
+          return json(
+            res,
+            store.views.neighbors(sid, id, { after: url.searchParams.get('after') }),
+          );
         if (parts[2] === 'history' && method === 'GET') return json(res, store.history(sid, id));
         if (method === 'GET') return json(res, store.entry(sid, id));
         if (method === 'PATCH') return json(res, store.updateEntry(sid, id, b));

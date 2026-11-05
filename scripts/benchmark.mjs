@@ -77,6 +77,22 @@ async function bench(StoreClass, name) {
       });
     }
   });
+  const relations = Array.from({ length: totals.edges }, (_, i) => ({
+    id: `r${i}`,
+    from_id: `e${i % totals.entries}`,
+    to_id: `e${(i * 7 + 1) % totals.entries}`,
+  }));
+  store.transaction(() => {
+    const insert = store.db.prepare('INSERT INTO relations VALUES(?,?,?,?,?)');
+    for (const [i, r] of relations.entries())
+      insert.run(
+        r.id,
+        space.id,
+        r.from_id,
+        r.to_id === r.from_id ? `e${(i + 2) % totals.entries}` : r.to_id,
+        `related-${i}`,
+      );
+  });
   const query = store.context(space.id, '青灯凭据');
   if (!query.entries.some((e) => e.id === 'e3456'))
     throw new Error('Benchmark correctness check failed');
@@ -95,13 +111,18 @@ async function bench(StoreClass, name) {
       }),
     ),
   };
-  const relations = Array.from({ length: totals.edges }, (_, i) => ({
-    id: `r${i}`,
-    from_id: `e${i % totals.entries}`,
-    to_id: `e${(i * 7 + 1) % totals.entries}`,
-  }));
   if (name === 'current') {
     data.graphPreparation = measure(() => graphSubset(entries, relations));
+    data.pageViews = {};
+    for (const view of ['graph', 'book', 'timeline', 'workshop', 'chat']) {
+      const result = store.views.read(space.id, { view });
+      data.pageViews[view] = {
+        ...measure(() => JSON.stringify(store.views.read(space.id, { view }))),
+        bytes: Buffer.byteLength(JSON.stringify(result)),
+      };
+    }
+    if (store.views.entries(space.id, { q: '青灯凭据' }).items[0]?.id !== 'e3456')
+      throw new Error('Catalog recall failed');
     const recall = store.conversationContext(space.id, '纸舟');
     if (recall.excerpts[0]?.id !== 'm3456') throw new Error('Conversation benchmark recall failed');
     data.conversationRecallSelective = measure(() => store.conversationContext(space.id, '纸舟'));
