@@ -1499,8 +1499,8 @@ function Workshop({
             自动延续同空间聊天
           </label>
           <p className="form-note">
-            本机检索历史用户原话，网页和 MCP
-            共用。关闭后不再召回其他会话或更早的片段；当前会话近期消息和已确认知识仍可用于回答。原话不会自动变成正式知识。
+            本机检索历史用户原话与已审阅摘要，网页和 MCP
+            共用。关闭后不再召回这些历史片段与摘要；当前会话近期消息和已确认知识仍可用于回答。原话不会自动变成正式知识，摘要需要先审阅。
           </p>
           <div className="persona-hints">
             <span>
@@ -1663,7 +1663,7 @@ function ReplyEvidenceView({ sid, sessionId, messageId, onClose, onConversation,
                 {data.model} · {date(data.createdAt)} {time(data.createdAt)}
               </p>
               <h3>检索出的知识、原话与摘要 · {recalled.length}</h3>
-              {!recalled.length && <p>本轮没有额外召回知识或历史原话。</p>}
+              {!recalled.length && <p>本轮没有额外召回知识、历史原话或摘要。</p>}
               {recalled.map((item) => (
                 <blockquote className="memory-excerpt" key={`${item.kind}:${item.ordinal}`}>
                   <small>
@@ -2223,8 +2223,8 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
           }}
         >
           <p>
-            将删除「{session?.title}」的消息、聊天索引与 MCP
-            绑定及本会话的回答参考记录，并清理其他回答记录引用的这段原话，无法在界面恢复。已经生成的回答、此前手动收为资料或确认的知识会保留，需另行处理。
+            将删除「{session?.title}」的消息、聊天索引、会话摘要、摘要任务、MCP
+            绑定及本会话的回答参考记录，并清理其他回答记录引用的这段原话与摘要，无法在界面恢复。其他会话已生成的回答、此前手动收为资料或确认的知识会保留，需另行处理。
           </p>
           <div className="button-row">
             <button className="secondary" disabled={deleting} onClick={() => setDeleteOpen(false)}>
