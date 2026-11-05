@@ -16,7 +16,7 @@ import { join, resolve } from 'node:path';
 import { constants } from 'node:fs';
 import { Store, Fault } from './store.mjs';
 
-const tables = [
+const baseTables = [
   'spaces',
   'sources',
   'entries',
@@ -28,6 +28,19 @@ const tables = [
   'reply_evidence',
   'reply_evidence_items',
 ];
+// Exact, previously shipped schema; never accept a schema supplied only by the manifest.
+const legacySchema = '29172325feaec65cc6a4a7d82740c4f50a5496cc337c31ac1aa3d20096a4eb1f';
+const summaryTables = [
+  'conversation_summaries',
+  'summary_messages',
+  'summary_items',
+  'summary_jobs',
+];
+function tablesFor(schema) {
+  if (schema === legacySchema) return baseTables;
+  if (schema === expectedSchemaHash()) return [...baseTables, ...summaryTables];
+  throw new Fault('备份数据库结构与此版本不匹配，请使用创建备份的版本恢复');
+}
 const digest = (data) => createHash('sha256').update(data).digest('hex');
 const schemaHash = (db) =>
   digest(
@@ -76,8 +89,7 @@ function inspect(path) {
   try {
     db.exec('PRAGMA trusted_schema=OFF; PRAGMA query_only=ON;');
     const schema = schemaHash(db);
-    if (schema !== expectedSchemaHash())
-      throw new Fault('备份数据库结构与此版本不匹配，请使用创建备份的版本恢复');
+    const tables = tablesFor(schema);
     const check = db.prepare('PRAGMA integrity_check').all();
     if (check.length !== 1 || Object.values(check[0])[0] !== 'ok')
       throw new Fault('备份数据库完整性校验失败');
@@ -96,6 +108,21 @@ function inspect(path) {
       )
       .get().n;
     if (mismatched || missing) throw new Fault('聊天索引与原始消息不一致');
+    if (schema !== legacySchema) {
+      const invalidSummaryIndex = db
+        .prepare(
+          `SELECT count(*) AS n FROM summary_search f
+        LEFT JOIN summary_items i ON i.id=f.rowid LEFT JOIN conversation_summaries c ON c.id=i.summary_id
+        LEFT JOIN sessions s ON s.id=c.session_id WHERE i.id IS NULL OR f.scope!='space'||replace(s.space_id,'-','')`,
+        )
+        .get().n;
+      const missingSummaryIndex = db
+        .prepare(
+          'SELECT count(*) AS n FROM summary_items i LEFT JOIN summary_search f ON f.rowid=i.id WHERE f.rowid IS NULL',
+        )
+        .get().n;
+      if (invalidSummaryIndex || missingSummaryIndex) throw new Fault('摘要索引与原始摘要不一致');
+    }
     return { schema, counts };
   } finally {
     db.close();
@@ -120,6 +147,7 @@ export async function readManifest(directory) {
     typeof data.createdAt !== 'string'
   )
     throw new Fault('不是受支持的星汐备份清单');
+  const tables = tablesFor(data.schema);
   if (
     !/^[a-f0-9]{64}$/.test(data.schema) ||
     !data.counts ||
@@ -204,18 +232,33 @@ export async function restoreBackup(directory, destination) {
     // Check the copied bytes, not only the source before copying (TOCTOU).
     if ((await regular(path)).size !== manifest.bytes || (await fileHash(path)) !== manifest.sha256)
       throw new Fault('恢复副本校验和不匹配');
-    const checked = inspect(path);
+    let checked = inspect(path);
     if (
       checked.schema !== manifest.schema ||
       JSON.stringify(checked.counts) !== JSON.stringify(manifest.counts)
     )
       throw new Fault('恢复副本与备份清单不一致');
+    const migrated = checked.schema === legacySchema;
+    if (migrated) {
+      // Only after verifying the copied legacy bytes, run our own additive migration.
+      const upgraded = new Store(path);
+      upgraded.close();
+      const standalone = new DatabaseSync(path, { allowExtension: false });
+      try {
+        standalone.exec('PRAGMA journal_mode=DELETE;');
+      } finally {
+        standalone.close();
+      }
+      checked = inspect(path);
+      if (checked.schema !== expectedSchemaHash()) throw new Fault('恢复副本升级失败');
+    }
     await flush(path);
     await rename(path, join(destination, 'xingxi.sqlite'));
     return {
       path: resolve(destination),
       counts: checked.counts,
       restored: true,
+      migrated,
       includesSecrets: false,
     };
   } catch (error) {

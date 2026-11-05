@@ -130,6 +130,44 @@ async function bench(StoreClass, name) {
     data.conversationRecallCommon = measure(() => store.conversationContext(space.id, '合成消息'));
     data.conversationRecallRecent = measure(() => store.conversationContext(space.id, ''));
     data.conversationResponseBytes = Buffer.byteLength(JSON.stringify(recall));
+    if (process.argv.includes('--summaries')) {
+      const pagesBefore = store.db.prepare('PRAGMA page_count').get().page_count;
+      let batches = 0;
+      while (batches < 250) {
+        const batch = store.summaries.nextBatch(space.id, s.id);
+        const sample = batch.filter((m) => m.role === 'assistant').slice(0, 8);
+        const summary = store.summaries.create(
+          space.id,
+          s.id,
+          batch,
+          sample.map((m, i) => ({
+            role: m.role,
+            title: batches === 123 && i === 0 ? '紫藤独有主题' : '合成讨论摘要',
+            body: '助手建议：这是合成测试材料，尚未被用户确认为决定。'.repeat(8),
+            evidence: [{ messageId: m.id, quote: m.body }],
+          })),
+        );
+        store.summaries.review(space.id, s.id, summary.id, { revision: 1, status: 'accepted' });
+        batches++;
+      }
+      const selective = store.summaries.context(space.id, '紫藤');
+      if (selective.length !== 1 || selective[0].role !== 'assistant')
+        throw new Error('Summary recall failed');
+      const common = store.summaries.context(space.id, '合成');
+      if (common.length !== 4) throw new Error('Summary recall budget failed');
+      data.summaries = {
+        batches,
+        items: store.db.prepare('SELECT count(*) n FROM summary_items').get().n,
+        selective: measure(() => JSON.stringify(store.summaries.context(space.id, '紫藤'))),
+        common: measure(() => JSON.stringify(store.summaries.context(space.id, '合成'))),
+        list: measure(() => JSON.stringify(store.summaries.list(space.id, s.id))),
+        contextBytes: Buffer.byteLength(JSON.stringify(common)),
+        databasePageGrowthBytes:
+          (store.db.prepare('PRAGMA page_count').get().page_count - pagesBefore) *
+          store.db.prepare('PRAGMA page_size').get().page_size,
+        note: '250 batches covering 10000 messages, 8 assistant items each. Deterministic fixtures; no model calls. 15 hot samples per query; includes JSON serialization.',
+      };
+    }
     if (process.argv.includes('--backup')) {
       const destination = join(dir, 'benchmark-backup');
       const delay = monitorEventLoopDelay({ resolution: 10 });

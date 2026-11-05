@@ -113,6 +113,10 @@ const server = createServer(async (req, res) => {
         return json(res, store.context(sid, url.searchParams.get('q') || ''));
       if (tail === 'conversation-context' && method === 'GET')
         return json(res, store.conversationContext(sid, url.searchParams.get('q') || ''));
+      if (tail === 'summary-context' && method === 'GET')
+        return json(res, {
+          summaries: store.summaries.context(sid, url.searchParams.get('q') || ''),
+        });
       if (tail === 'sources' && method === 'POST') return json(res, store.ingest(sid, b), 201);
       if (tail === 'entries' && method === 'POST') return json(res, store.propose(sid, b), 201);
       if (tail === 'relations' && method === 'POST') return json(res, store.relate(sid, b), 201);
@@ -150,6 +154,24 @@ const server = createServer(async (req, res) => {
       }
       if (parts[0] === 'jobs' && id && method === 'GET') return json(res, service.job(sid, id));
       if (parts[0] === 'sessions' && id) {
+        if (parts[2] === 'summaries') {
+          if (parts.length === 3 && method === 'GET')
+            return json(
+              res,
+              store.summaries.list(sid, id, {
+                before: url.searchParams.get('before') ?? undefined,
+              }),
+            );
+          if (parts.length === 3 && method === 'POST')
+            return json(res, service.summarize(sid, id), 202);
+          if (parts.length === 5 && parts[3] === 'jobs' && parts[4] && method === 'GET')
+            return json(res, service.summaryJob(sid, id, parts[4]));
+          if (parts.length === 4 && method === 'GET')
+            return json(res, store.summaries.read(sid, id, parts[3]));
+          if (parts.length === 4 && method === 'PATCH')
+            return json(res, store.summaries.review(sid, id, parts[3], b));
+          throw new Fault('摘要接口不存在', 404);
+        }
         if (parts.length === 2 && method === 'PATCH')
           return json(res, store.updateSession(sid, id, b));
         if (parts.length === 2 && method === 'DELETE')

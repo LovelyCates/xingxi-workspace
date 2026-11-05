@@ -176,8 +176,22 @@ test('真实 HTTP 与 stdio MCP：认证、跨站拒绝、命名空间、入库�
   );
   // A deterministic fixture supplies stored audit data; no cloud model is called.
   const fixtureStore = new Store(join(dir, 'xingxi.sqlite'));
+  let summary;
   try {
     const firstMessage = fixtureStore.session(a.id, s.id).messages[0];
+    summary = fixtureStore.summaries.create(
+      a.id,
+      s.id,
+      fixtureStore.summaries.nextBatch(a.id, s.id),
+      [
+        {
+          role: 'assistant',
+          title: '虚构摘要标记',
+          body: '助手说明这是一条测试回复，不能当作用户决定。',
+          evidence: [{ messageId: manualReply.id, quote: manualReply.body }],
+        },
+      ],
+    );
     fixtureStore.replyEvidence.save(a.id, s.id, manualReply.id, {
       model: 'fixture-only',
       knowledge: [],
@@ -189,6 +203,70 @@ test('真实 HTTP 与 stdio MCP：认证、跨站拒绝、命名空间、入库�
   } finally {
     fixtureStore.close();
   }
+  assert.equal(
+    (await call('summary_list', { spaceId: a.id, sessionId: s.id })).summaries[0].id,
+    summary.id,
+  );
+  assert.equal(
+    (await call('summary_read', { spaceId: a.id, sessionId: s.id, summaryId: summary.id })).items[0]
+      .role,
+    'assistant',
+  );
+  assert.equal(
+    (await call('summary_recall', { spaceId: a.id, query: '摘要标记' })).summaries.length,
+    0,
+  );
+  assert.equal((await call('summary_build', { spaceId: a.id, sessionId: s.id })).isError, true);
+  const summaryRoute = `${base}/api/spaces/${a.id}/sessions/${s.id}/summaries/${summary.id}`;
+  assert.equal(
+    (
+      await fetch(summaryRoute, {
+        method: 'PATCH',
+        headers: { ...headers, Origin: 'https://evil.example' },
+        body: JSON.stringify({ revision: 1, status: 'accepted' }),
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await fetch(summaryRoute, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ revision: 1, status: 'accepted' }),
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await fetch(summaryRoute, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ revision: 1, status: 'accepted' }),
+      })
+    ).status,
+    409,
+  );
+  const recalledSummary = await call('summary_recall', { spaceId: a.id, query: '摘要标记' });
+  assert.equal(recalledSummary.summaries[0].role, 'assistant');
+  assert.deepEqual(
+    await (
+      await fetch(
+        `${base}/api/spaces/${a.id}/summary-context?q=${encodeURIComponent('摘要标记')}`,
+        { headers },
+      )
+    ).json(),
+    recalledSummary,
+  );
+  assert.equal(
+    (await call('summary_read', { spaceId: b.id, sessionId: s.id, summaryId: summary.id })).isError,
+    true,
+  );
+  assert.equal(
+    (await call('summary_recall', { spaceId: b.id, query: '摘要标记' })).summaries.length,
+    0,
+  );
   const mcpEvidence = await call('chat_evidence', {
     spaceId: a.id,
     sessionId: s.id,
@@ -370,6 +448,10 @@ test('真实 HTTP 与 stdio MCP：认证、跨站拒绝、命名空间、入库�
       assert.ok(!result.isError, result.content[0].text);
       return JSON.parse(result.content[0].text);
     };
+    assert.deepEqual(
+      await recoverCall('summary_recall', { spaceId: a.id, query: '摘要标记' }),
+      recalledSummary,
+    );
     assert.equal(
       (await recoverCall('session_open', { spaceId: a.id, binding: 'restore-continuity' })).id,
       bound.id,

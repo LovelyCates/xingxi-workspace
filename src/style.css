@@ -2666,6 +2666,61 @@ select {
 .memory-excerpt h4 {
   margin: 10px 0;
 }
+.summary-panel {
+  display: grid;
+  gap: 14px;
+}
+.summary-overview,
+.summary-actions,
+.summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.summary-overview strong {
+  font-size: 25px;
+  font-weight: 500;
+}
+.summary-overview small,
+.summary-row small {
+  display: block;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.summary-actions {
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+.summary-row {
+  width: 100%;
+  text-align: left;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(123, 110, 196, 0.05);
+}
+.summary-row:hover {
+  border-color: var(--accent);
+}
+.summary-item {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+  margin: 14px 0 22px;
+  display: grid;
+  gap: 12px;
+}
+.summary-item label {
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.summary-item textarea {
+  min-height: 85px;
+  resize: vertical;
+}
 
 .backup-panel {
   grid-column: 1 / -1;

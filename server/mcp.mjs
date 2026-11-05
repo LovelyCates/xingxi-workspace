@@ -65,7 +65,7 @@ function tool(name, description, inputSchema, fn, readonly = false) {
       annotations: {
         readOnlyHint: readonly,
         destructiveHint: false,
-        openWorldHint: ['chat_reply', 'wiki_compile'].includes(name),
+        openWorldHint: ['chat_reply', 'wiki_compile', 'summary_build'].includes(name),
       },
     },
     async (args) => {
@@ -193,6 +193,43 @@ tool(
     clientId: z.string().min(1).max(150),
   },
   (a) => request(`${spacePath(a)}/sessions/${a.sessionId}/messages`, 'POST', a),
+);
+tool(
+  'summary_recall',
+  '检索当前空间最多4条已审阅的会话摘要，遵守空间/会话召回开关。保留原角色与出处，助手建议不代表用户决定；不调用模型。',
+  { ...sid, query: z.string().max(2000).default('') },
+  (a) => request(`${spacePath(a)}/summary-context?q=${encodeURIComponent(a.query)}`),
+  true,
+);
+tool(
+  'summary_build',
+  '调用 DeepSeek 整理下一段尚未整理的会话，最多40条/24000字符，返回任务。会产生模型费用；摘要需用户在网页审阅后才能召回，助手内容不会变成用户事实。',
+  { ...session },
+  (a) => request(`${spacePath(a)}/sessions/${a.sessionId}/summaries`, 'POST', {}),
+);
+tool(
+  'summary_job',
+  '读取会话摘要任务状态。',
+  { ...session, jobId: id },
+  (a) => request(`${spacePath(a)}/sessions/${a.sessionId}/summaries/jobs/${a.jobId}`),
+  true,
+);
+tool(
+  'summary_list',
+  '分页读取会话摘要目录与处理进度，不调用模型。',
+  { ...session, before: z.number().int().positive().optional() },
+  (a) =>
+    request(
+      `${spacePath(a)}/sessions/${a.sessionId}/summaries${a.before ? `?before=${a.before}` : ''}`,
+    ),
+  true,
+);
+tool(
+  'summary_read',
+  '读取带角色与逐字出处的摘要；pending 或 archived 不参与模型召回。',
+  { ...session, summaryId: id },
+  (a) => request(`${spacePath(a)}/sessions/${a.sessionId}/summaries/${a.summaryId}`),
+  true,
 );
 tool(
   'chat_evidence',

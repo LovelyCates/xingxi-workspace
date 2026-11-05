@@ -196,3 +196,37 @@ test('备份控制器单任务运行、忽略未完成目录，并将恢复写�
   assert.ok(existsSync(join(manager.active.result.path, 'xingxi.sqlite')));
   assert.equal(existsSync(join(manager.active.result.path, 'secrets.json')), false);
 });
+
+test('上一发布版的精确已知结构可验证并隔离升级，原备份不改变', async (t) => {
+  const { dir, store, space } = fixture(t);
+  const session = store.openSession(space.id, { binding: 'legacy-stable' });
+  store.append(space.id, session.id, {
+    role: 'user',
+    body: '虚构旧版月桂消息',
+    clientId: 'legacy',
+  });
+  store.db
+    .exec(`DROP TRIGGER evidence_summary_delete; DROP TRIGGER summary_source_delete; DROP TRIGGER summary_item_delete;
+    DROP TABLE summary_jobs; DROP TABLE summary_messages; DROP TABLE summary_search; DROP TABLE summary_items; DROP TABLE conversation_summaries;`);
+  const backup = join(dir, 'legacy');
+  const created = await createBackup(join(dir, 'xingxi.sqlite'), backup);
+  assert.equal(
+    created.manifest.schema,
+    '29172325feaec65cc6a4a7d82740c4f50a5496cc337c31ac1aa3d20096a4eb1f',
+  );
+  const bytes = readFileSync(join(backup, 'xingxi.sqlite'));
+  assert.equal((await verifyBackup(backup)).verified, true);
+  const target = join(dir, 'legacy-restored');
+  const result = await restoreBackup(backup, target);
+  assert.equal(result.migrated, true);
+  assert.deepEqual(readFileSync(join(backup, 'xingxi.sqlite')), bytes);
+  const restored = new Store(join(target, 'xingxi.sqlite'));
+  try {
+    assert.equal(restored.openSession(space.id, { binding: 'legacy-stable' }).id, session.id);
+    assert.equal(restored.conversationContext(space.id, '月桂').excerpts.length, 1);
+    assert.equal(restored.summaries.list(space.id, session.id).coverage.total, 1);
+    assert.deepEqual(restored.db.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally {
+    restored.close();
+  }
+});

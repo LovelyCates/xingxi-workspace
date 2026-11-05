@@ -43,6 +43,7 @@ import {
 import Graph, { kindNames, kindColors } from './Graph';
 import './style.css';
 import Backups from './Backups';
+import Summaries from './Summaries';
 
 async function api(path, method = 'GET', data) {
   const res = await fetch(`/api${path}`, {
@@ -1643,9 +1644,9 @@ function ReplyEvidenceView({ sid, sessionId, messageId, onClose, onConversation,
   const recent = data?.items.filter((item) => item.kind === 'recent') || [];
   const labels = {
     deleted: '原始记录已删除，摘录已清理',
-    disabled: '该原话已关闭召回，暂不展示',
-    changed: '知识已更新，以下为当时版本',
-    archived: '知识已归档，以下为当时版本',
+    disabled: '该会话已关闭召回，暂不展示',
+    changed: '内容已更新，以下为当时版本',
+    archived: '内容已归档，以下为当时版本',
   };
   return (
     <Modal title="这次回答的参考记录" onClose={onClose} wide>
@@ -1661,12 +1662,16 @@ function ReplyEvidenceView({ sid, sessionId, messageId, onClose, onConversation,
               <p className="form-note">
                 {data.model} · {date(data.createdAt)} {time(data.createdAt)}
               </p>
-              <h3>检索出的知识与原话 · {recalled.length}</h3>
+              <h3>检索出的知识、原话与摘要 · {recalled.length}</h3>
               {!recalled.length && <p>本轮没有额外召回知识或历史原话。</p>}
               {recalled.map((item) => (
                 <blockquote className="memory-excerpt" key={`${item.kind}:${item.ordinal}`}>
                   <small>
-                    {item.kind === 'knowledge' ? '已确认知识' : '历史用户原话'}
+                    {item.kind === 'knowledge'
+                      ? '已确认知识'
+                      : item.kind === 'summary'
+                        ? '已审阅会话摘要'
+                        : '历史用户原话'}
                     {labels[item.state] ? ` · ${labels[item.state]}` : ''}
                   </small>
                   {item.snapshot &&
@@ -1685,6 +1690,39 @@ function ReplyEvidenceView({ sid, sessionId, messageId, onClose, onConversation,
                             </p>
                           ))}
                         </details>
+                      </>
+                    ) : item.kind === 'summary' ? (
+                      <>
+                        <h4>
+                          {item.snapshot.title} ·{' '}
+                          {item.snapshot.role === 'user' ? '用户表达' : '助手建议或回答'} · 版本{' '}
+                          {item.snapshot.revision}
+                        </h4>
+                        <p>{item.snapshot.body}</p>
+                        <small>
+                          原会话：{item.snapshot.session_title}。这是摘要，不是逐字原话。
+                        </small>
+                        {item.snapshot.truncated && <small> 模型收到的是有长度限制的摘要。</small>}
+                        <details>
+                          <summary>当时提供的原话依据</summary>
+                          {item.snapshot.evidence.map((ev, index) => (
+                            <p key={index}>
+                              {ev.quote}
+                              <small>
+                                {' '}
+                                · {date(ev.created_at)} {time(ev.created_at)}
+                                {ev.truncated ? ' · 片段' : ''}
+                              </small>
+                            </p>
+                          ))}
+                        </details>
+                        <button
+                          className="text-button"
+                          disabled={!canNavigate}
+                          onClick={() => onConversation(item.snapshot.session_id)}
+                        >
+                          打开原会话
+                        </button>
                       </>
                     ) : (
                       <>
@@ -1740,7 +1778,8 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
     [deleting, setDeleting] = useState(false),
     [changingMemory, setChangingMemory] = useState(false),
     [deleteOpen, setDeleteOpen] = useState(false),
-    [evidenceId, setEvidenceId] = useState(null);
+    [evidenceId, setEvidenceId] = useState(null),
+    [summaryOpen, setSummaryOpen] = useState(false);
   const bottom = useRef(),
     preserveScroll = useRef(false);
   async function load(id) {
@@ -1891,6 +1930,15 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
           {session && (
             <button
               className="text-button"
+              disabled={sending || loading || deleting}
+              onClick={() => setSummaryOpen(true)}
+            >
+              会话摘要
+            </button>
+          )}
+          {session && (
+            <button
+              className="text-button"
               disabled={sending || loadingOlder || changingMemory}
               onClick={() => setDeleteOpen(true)}
             >
@@ -1927,7 +1975,7 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
                   }
                 }}
               />{' '}
-              允许从这段会话召回历史原话
+              允许从这段会话召回历史原话与已审阅摘要
             </label>
           </div>
         )}
@@ -2101,6 +2149,17 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
             setEvidenceId(null);
             load(id);
           }}
+        />
+      )}
+      {summaryOpen && session && (
+        <Summaries
+          key={session.id}
+          sid={sid}
+          sessionId={session.id}
+          configured={configured}
+          api={api}
+          Modal={Modal}
+          onClose={() => setSummaryOpen(false)}
         />
       )}
       {memoryView && (
