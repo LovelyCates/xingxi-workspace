@@ -23,6 +23,11 @@ import { verifyBackup, restoreBackup } from '../server/backup-core.mjs';
 
 const createBackup = (source, destination) =>
   backupTask({ operation: 'create', source, destination });
+const dropChanges = (db) =>
+  db.exec(`DROP VIEW memory_change_state;
+  DROP TRIGGER evidence_change_delete; DROP TRIGGER evidence_change_unavailable;
+  DROP TRIGGER change_message_deleted; DROP TRIGGER change_source_deleted; DROP TRIGGER change_entry_deleted; DROP TRIGGER change_summary_deleted;
+  DROP TABLE memory_change_events; DROP TABLE memory_changes; DROP TABLE memory_change_search;`);
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'xingxi-backup-'));
@@ -205,6 +210,7 @@ test('上一发布版的精确已知结构可验证并隔离升级，原备份�
     body: '虚构旧版月桂消息',
     clientId: 'legacy',
   });
+  dropChanges(store.db);
   store.db
     .exec(`DROP TRIGGER evidence_summary_delete; DROP TRIGGER summary_source_delete; DROP TRIGGER summary_item_delete;
     DROP TABLE summary_jobs; DROP TABLE summary_messages; DROP TABLE summary_search; DROP TABLE summary_items; DROP TABLE conversation_summaries;`);
@@ -228,5 +234,44 @@ test('上一发布版的精确已知结构可验证并隔离升级，原备份�
     assert.deepEqual(restored.db.prepare('PRAGMA foreign_key_check').all(), []);
   } finally {
     restored.close();
+  }
+});
+
+test('摘要发布版备份可增量升级到变更版本，已审阅摘要继续召回', async (t) => {
+  const { dir, store, space } = fixture(t);
+  const session = store.createSession(space.id);
+  const m = store.append(space.id, session.id, {
+    role: 'assistant',
+    body: '虚构月桂建议',
+    clientId: 'summary',
+  });
+  const c = store.summaries.create(
+    space.id,
+    session.id,
+    store.summaries.nextBatch(space.id, session.id),
+    [
+      {
+        role: 'assistant',
+        title: '月桂',
+        body: m.body,
+        evidence: [{ messageId: m.id, quote: m.body }],
+      },
+    ],
+  );
+  store.summaries.review(space.id, session.id, c.id, { revision: 1, status: 'accepted' });
+  dropChanges(store.db);
+  const backup = join(dir, 'summary-release');
+  assert.equal(
+    (await createBackup(join(dir, 'xingxi.sqlite'), backup)).manifest.schema,
+    'e88c0ef5dc8d7cf2c49d48f9e4e1861b27f3bd38a85d388442c02a63dda91231',
+  );
+  const target = join(dir, 'summary-recovered');
+  assert.equal((await restoreBackup(backup, target)).migrated, true);
+  const recovered = new Store(join(target, 'xingxi.sqlite'));
+  try {
+    assert.equal(recovered.summaries.context(space.id, '月桂')[0].id, c.id);
+    assert.equal(recovered.changes.list(space.id).items.length, 0);
+  } finally {
+    recovered.close();
   }
 });

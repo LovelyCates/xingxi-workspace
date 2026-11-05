@@ -1,4 +1,5 @@
 import { searchTerms } from './search.mjs';
+import { unsuperseded } from './memory-changes.mjs';
 
 // Rebuildable local index of user quotations. Never promotes generated claims to facts.
 export class ConversationMemory {
@@ -41,7 +42,11 @@ export class ConversationMemory {
       0
     );
   }
-  search(spaceId, query = '', { excludeIds = [], limit = 6, recent = false } = {}) {
+  search(
+    spaceId,
+    query = '',
+    { excludeIds = [], limit = 6, recent = false, includeSuperseded = false } = {},
+  ) {
     this.store.space(spaceId);
     if (!this.enabled(spaceId)) return [];
     const terms = searchTerms(String(query).slice(0, 2000)).slice(0, 40);
@@ -58,6 +63,7 @@ export class ConversationMemory {
       JOIN sessions s ON s.id=m.session_id
       LEFT JOIN session_memory sm ON sm.session_id=s.id
       WHERE conversation_search MATCH ? AND s.space_id=? AND COALESCE(sm.enabled,1)=1
+      ${includeSuperseded ? '' : `AND ${unsuperseded('conversation', 'm.id')}`}
       ${excluded.length ? `AND m.id NOT IN (${excluded.map(() => '?').join(',')})` : ''}
       ORDER BY ${terms.length && !recent ? 'rank,' : ''} conversation_search.rowid DESC LIMIT ?`,
       )

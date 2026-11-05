@@ -1,5 +1,6 @@
 import { Fault, uid, now, str } from './store.mjs';
 import { searchTerms } from './search.mjs';
+import { unsuperseded } from './memory-changes.mjs';
 
 export class ConversationSummaries {
   constructor(store) {
@@ -179,7 +180,7 @@ export class ConversationSummaries {
         .all(sessionId),
     };
   }
-  context(spaceId, query = '', { excludeIds = [] } = {}) {
+  context(spaceId, query = '', { excludeIds = [], includeSuperseded = false } = {}) {
     this.store.space(spaceId);
     if (!this.store.conversations.enabled(spaceId)) return [];
     const terms = searchTerms(String(query).slice(0, 2000)).slice(0, 40);
@@ -194,6 +195,7 @@ export class ConversationSummaries {
       JOIN conversation_summaries s ON s.id=i.summary_id JOIN sessions c ON c.id=s.session_id
       LEFT JOIN session_memory sm ON sm.session_id=c.id
       WHERE summary_search MATCH ? AND c.space_id=? AND s.status='accepted' AND COALESCE(sm.enabled,1)=1
+      ${includeSuperseded ? '' : `AND ${unsuperseded('summary', 's.id', 's.revision', 'i.position')}`}
       ${excluded.length ? `AND NOT EXISTS (SELECT 1 FROM json_each(i.evidence) ev WHERE json_extract(ev.value,'$.messageId') IN (${excluded.map(() => '?').join(',')}))` : ''}
       ORDER BY ${terms.length ? 'rank,' : ''} s.last_sequence DESC,i.position LIMIT 4`,
       )

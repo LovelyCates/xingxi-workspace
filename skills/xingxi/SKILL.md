@@ -37,3 +37,11 @@ description: 通过已连接的星汐 MCP 使用项目 Wiki、保存有出处的
 ## 实际边界
 
 首版为关键词/中文双字检索，无向量召回。跨会话共享同空间已确认记忆、允许召回的历史用户原话和已审阅摘要，完整消息历史仍按会话保存。聊天与摘要召回遵守工坊与会话的开关，不自动把原话升级为知识。不能承诺另一宿主的上下文自动同步，也不能承诺无限记忆。持有本机 MCP 令牌的客户端有实例级访问权；spaceId 只是业务作用域，不是多人权限隔离。
+
+## 纠正、时间变化与未决冲突
+
+`context_get`、`conversation_recall`、`summary_recall` 返回的 `changes` 是当前生效的已审阅变更，必须与原始结果一起理解；也可使用 `memory_change_recall` 单独检索。`knowledge_read.currentChange` 提醒条目原文已不适合作为当前结论。correction 表示纠正，change 表示情况后来变化，conflict 表示仍未解决，不能从旧记录擅选一个答案。原文阅读与当前事实判断是不同用途。
+
+用户明确要求更正时，先定位旧对象及 revision；摘要还需 position，消息 revision 为 0。以同空间原始资料或用户消息的连续逐字摘录为 source，调用 `memory_change_propose` 提交 target、source、kind、title、body；effectiveAt 如指定必须是含时区的有效 ISO 时间。不得用助手猜测冒充用户纠正。仅有新说明时，先经用户授权使用 wiki_ingest 保存必要原文。不循环猜测目标，也不把没有命中当成没有旧记录。
+
+用 `memory_change_list` / `memory_change_read` 查看状态。提案默认 pending，提醒用户到网页「记忆变更」核对；MCP 不提供确认工具。未来生效、版本失效、被较新变更覆盖、关闭来源召回及来源删除都可能使正文不参与当前回答。不得称提案成功就完成了更正。不要为了恢复旧值擅自归档限制，也不要尝试绕过召回开关。

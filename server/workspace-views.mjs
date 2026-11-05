@@ -197,6 +197,11 @@ export class WorkspaceViews {
     const entry = this.store.entry(spaceId, id);
     return {
       ...entry,
+      currentChange: this.store.changes.forTarget(spaceId, {
+        kind: 'knowledge',
+        id: entry.id,
+        revision: entry.revision,
+      }),
       links: this.neighbors(spaceId, id),
       sourceSummaries: entry.evidence.map((ev) =>
         this.db

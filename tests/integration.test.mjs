@@ -359,13 +359,68 @@ test('真实 HTTP 与 stdio MCP：认证、跨站拒绝、命名空间、入库�
     true,
   );
   const bound = await call('session_open', { spaceId: a.id, binding: 'restore-continuity' });
-  await call('session_append', {
+  const correctionMessage = await call('session_append', {
     spaceId: a.id,
     sessionId: bound.id,
     role: 'user',
-    body: '虚构验收：恢复后仍有银杏标记。',
+    body: '虚构验收更正：不再延续原话题，恢复后仅保留银杏标记。',
     clientId: 'restored-memory',
   });
+  const oldMessage = (await call('session_read', { spaceId: a.id, sessionId: s.id })).messages[0];
+  const change = await call('memory_change_propose', {
+    spaceId: a.id,
+    kind: 'correction',
+    title: '话题更正',
+    body: correctionMessage.body,
+    target: { kind: 'conversation', id: oldMessage.id, revision: 0 },
+    source: { kind: 'conversation', id: correctionMessage.id, quote: correctionMessage.body },
+    effectiveAt: '2020-01-01T00:00:00Z',
+  });
+  assert.equal(change.status, 'pending');
+  assert.equal((await call('memory_change_list', { spaceId: a.id })).items[0].id, change.id);
+  assert.equal(
+    (await call('memory_change_recall', { spaceId: a.id, query: '下次' })).changes.length,
+    0,
+  );
+  assert.equal(
+    (await call('memory_change_read', { spaceId: b.id, changeId: change.id })).isError,
+    true,
+  );
+  const changeUrl = `${base}/api/spaces/${a.id}/changes/${change.id}`;
+  assert.equal(
+    (
+      await fetch(changeUrl, {
+        method: 'PATCH',
+        headers: { ...headers, Origin: 'https://evil.example' },
+        body: JSON.stringify({ revision: 1, status: 'accepted' }),
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await fetch(changeUrl, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ revision: 1, status: 'accepted' }),
+      })
+    ).status,
+    200,
+  );
+  const changeContext = await call('memory_change_recall', { spaceId: a.id, query: '下次' });
+  assert.equal(changeContext.changes[0].id, change.id);
+  const correctedRecall = await call('conversation_recall', { spaceId: a.id, query: '下次' });
+  assert.equal(correctedRecall.excerpts.length, 0);
+  assert.deepEqual(correctedRecall.changes, changeContext.changes);
+  assert.deepEqual(
+    await (
+      await fetch(`${base}/api/spaces/${a.id}/changes/context?q=${encodeURIComponent('下次')}`, {
+        headers,
+      })
+    ).json(),
+    changeContext,
+  );
+  const summaryBeforeBackup = await call('summary_recall', { spaceId: a.id, query: '摘要标记' });
   const backupStart = await fetch(`${base}/api/backups`, { method: 'POST', headers, body: '{}' });
   assert.equal(backupStart.status, 202);
   let backupStatus;
@@ -449,8 +504,12 @@ test('真实 HTTP 与 stdio MCP：认证、跨站拒绝、命名空间、入库�
       return JSON.parse(result.content[0].text);
     };
     assert.deepEqual(
+      await recoverCall('memory_change_recall', { spaceId: a.id, query: '下次' }),
+      changeContext,
+    );
+    assert.deepEqual(
       await recoverCall('summary_recall', { spaceId: a.id, query: '摘要标记' }),
-      recalledSummary,
+      summaryBeforeBackup,
     );
     assert.equal(
       (await recoverCall('session_open', { spaceId: a.id, binding: 'restore-continuity' })).id,

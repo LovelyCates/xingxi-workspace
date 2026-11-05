@@ -168,6 +168,37 @@ async function bench(StoreClass, name) {
         note: '250 batches covering 10000 messages, 8 assistant items each. Deterministic fixtures; no model calls. 15 hot samples per query; includes JSON serialization.',
       };
     }
+    if (process.argv.includes('--changes')) {
+      const pagesBefore = store.db.prepare('PRAGMA page_count').get().page_count;
+      for (let i = 0; i < 1000; i++) {
+        const target = entries[i % 500];
+        const change = store.changes.manual(space.id, {
+          kind: 'change',
+          title: i === 671 ? '榆树独有修订' : '合成变更',
+          body: '这是合成变更说明，新的版本替代旧版本。'.repeat(8),
+          target: { kind: 'knowledge', id: target.id, revision: target.revision },
+          effectiveAt: i < 500 ? '2020-01-01T00:00:00Z' : '2021-01-01T00:00:00Z',
+        });
+        store.changes.review(space.id, change.id, { revision: 1, status: 'accepted' });
+      }
+      const selected = store.changes.context(space.id, '榆树');
+      const common = store.changes.context(space.id, '合成');
+      if (selected.length !== 1 || common.length !== 6)
+        throw new Error('Memory change benchmark recall failed');
+      data.memoryChanges = {
+        records: 1000,
+        targets: 500,
+        selective: measure(() => JSON.stringify(store.changes.context(space.id, '榆树'))),
+        common: measure(() => JSON.stringify(store.changes.context(space.id, '合成'))),
+        list: measure(() => JSON.stringify(store.changes.list(space.id))),
+        knowledgeUnaffected: measure(() => JSON.stringify(store.context(space.id, '青灯凭据'))),
+        contextBytes: Buffer.byteLength(JSON.stringify(common)),
+        databasePageGrowthBytes:
+          (store.db.prepare('PRAGMA page_count').get().page_count - pagesBefore) *
+          store.db.prepare('PRAGMA page_size').get().page_size,
+        note: '1000 changes to 500 targets, two effective versions each. Includes independently saved source text and search indexes. 15 repeated samples in populated process; no per-operation warmup or model calls.',
+      };
+    }
     if (process.argv.includes('--backup')) {
       const destination = join(dir, 'benchmark-backup');
       const delay = monitorEventLoopDelay({ resolution: 10 });

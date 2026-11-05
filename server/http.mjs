@@ -110,13 +110,50 @@ const server = createServer(async (req, res) => {
       if (!tail && method === 'GET') return json(res, store.snapshot(sid));
       if (!tail && method === 'PATCH') return json(res, store.updateSpace(sid, b));
       if (tail === 'context' && method === 'GET')
-        return json(res, store.context(sid, url.searchParams.get('q') || ''));
+        return json(res, {
+          ...store.context(sid, url.searchParams.get('q') || ''),
+          changes: store.changes.context(sid, url.searchParams.get('q') || ''),
+        });
       if (tail === 'conversation-context' && method === 'GET')
-        return json(res, store.conversationContext(sid, url.searchParams.get('q') || ''));
+        return json(res, {
+          ...store.conversationContext(sid, url.searchParams.get('q') || ''),
+          changes: store.changes.context(sid, url.searchParams.get('q') || ''),
+        });
       if (tail === 'summary-context' && method === 'GET')
         return json(res, {
           summaries: store.summaries.context(sid, url.searchParams.get('q') || ''),
+          changes: store.changes.context(sid, url.searchParams.get('q') || ''),
         });
+      if (tail === 'changes' && method === 'GET')
+        return json(
+          res,
+          store.changes.list(sid, {
+            before: url.searchParams.get('before') ?? undefined,
+            status: url.searchParams.get('status') || 'all',
+          }),
+        );
+      if (tail === 'changes' && method === 'POST')
+        return json(res, store.changes.propose(sid, b), 201);
+      if (tail === 'changes/manual' && method === 'POST')
+        return json(res, store.changes.manual(sid, b), 201);
+      if (tail === 'changes/candidates' && method === 'GET')
+        return json(res, store.changes.candidates(sid, url.searchParams.get('q') || ''));
+      if (tail === 'changes/target' && method === 'GET')
+        return json(
+          res,
+          store.changes.target(sid, {
+            kind: url.searchParams.get('kind'),
+            id: url.searchParams.get('id'),
+            position: Number(url.searchParams.get('position') ?? -1),
+          }),
+        );
+      if (tail === 'changes/context' && method === 'GET')
+        return json(res, { changes: store.changes.context(sid, url.searchParams.get('q') || '') });
+      const changeRoute = tail.match(/^changes\/([^/]+)$/);
+      if (changeRoute && method === 'GET')
+        return json(res, store.changes.read(sid, changeRoute[1]));
+      if (changeRoute && method === 'PATCH')
+        return json(res, store.changes.review(sid, changeRoute[1], b));
       if (tail === 'sources' && method === 'POST') return json(res, store.ingest(sid, b), 201);
       if (tail === 'entries' && method === 'POST') return json(res, store.propose(sid, b), 201);
       if (tail === 'relations' && method === 'POST') return json(res, store.relate(sid, b), 201);
@@ -149,7 +186,17 @@ const server = createServer(async (req, res) => {
             store.views.neighbors(sid, id, { after: url.searchParams.get('after') }),
           );
         if (parts[2] === 'history' && method === 'GET') return json(res, store.history(sid, id));
-        if (method === 'GET') return json(res, store.entry(sid, id));
+        if (method === 'GET') {
+          const entry = store.entry(sid, id);
+          return json(res, {
+            ...entry,
+            currentChange: store.changes.forTarget(sid, {
+              kind: 'knowledge',
+              id,
+              revision: entry.revision,
+            }),
+          });
+        }
         if (method === 'PATCH') return json(res, store.updateEntry(sid, id, b));
       }
       if (parts[0] === 'jobs' && id && method === 'GET') return json(res, service.job(sid, id));

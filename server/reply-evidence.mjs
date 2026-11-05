@@ -17,6 +17,8 @@ export class ReplyEvidence {
         PRIMARY KEY(reply_id,kind,ordinal)
       );
       CREATE TRIGGER IF NOT EXISTS evidence_summary_delete AFTER DELETE ON conversation_summaries BEGIN UPDATE reply_evidence_items SET payload=NULL,state='deleted' WHERE target_id=old.id AND kind='summary'; END;
+      CREATE TRIGGER IF NOT EXISTS evidence_change_delete AFTER DELETE ON memory_changes BEGIN UPDATE reply_evidence_items SET payload=NULL,state='deleted' WHERE target_id=old.id AND kind='changes'; END;
+      CREATE TRIGGER IF NOT EXISTS evidence_change_unavailable AFTER UPDATE ON memory_changes WHEN new.body='' BEGIN UPDATE reply_evidence_items SET payload=NULL,state='deleted' WHERE target_id=new.id AND kind='changes'; END;
       CREATE INDEX IF NOT EXISTS evidence_target ON reply_evidence_items(target_id,kind);
       CREATE TRIGGER IF NOT EXISTS evidence_message_delete AFTER DELETE ON messages BEGIN
         UPDATE reply_evidence_items SET payload=NULL,state='deleted'
@@ -28,14 +30,31 @@ export class ReplyEvidence {
       END;
     `);
   }
-  save(spaceId, sessionId, messageId, { model, knowledge, conversation, recent, summary = [] }) {
+  save(
+    spaceId,
+    sessionId,
+    messageId,
+    { model, knowledge, conversation, recent, summary = [], changes = [] },
+  ) {
     const reply = this.message(spaceId, sessionId, messageId);
     if (reply.role !== 'assistant') throw new Fault('只有助手回答可以记录参考依据');
-    if (knowledge.length > 8 || conversation.length > 8 || recent.length > 20 || summary.length > 4)
+    if (
+      knowledge.length > 8 ||
+      conversation.length > 8 ||
+      recent.length > 20 ||
+      summary.length > 4 ||
+      changes.length > 6
+    )
       throw new Fault('回答参考依据超出预算');
     this.store.transaction(() => {
       this.db.prepare('INSERT INTO reply_evidence VALUES(?,?,?,1)').run(messageId, model, now());
-      for (const [kind, items] of Object.entries({ knowledge, conversation, recent, summary })) {
+      for (const [kind, items] of Object.entries({
+        knowledge,
+        conversation,
+        recent,
+        summary,
+        changes,
+      })) {
         items.forEach((item, ordinal) => {
           const target = this.target(spaceId, kind, item.id);
           // A recalled conversation may be deleted while the model is answering.
@@ -63,6 +82,7 @@ export class ReplyEvidence {
     return row;
   }
   target(spaceId, kind, id) {
+    if (kind === 'changes') return this.store.changes.auditTarget(spaceId, id);
     if (kind === 'summary')
       return this.db
         .prepare(
@@ -103,17 +123,18 @@ export class ReplyEvidence {
         const target = this.target(spaceId, row.kind, row.target_id);
         if (row.state === 'deleted' || !target || !row.payload)
           return { ...base, state: 'deleted' };
-        if (row.kind !== 'knowledge' && (!enabled || !target.enabled))
+        if (row.kind !== 'knowledge' && ((!enabled && row.kind !== 'changes') || !target.enabled))
           return { ...base, state: 'disabled' };
         const snapshot = JSON.parse(row.payload);
         let state = 'available';
-        if (['knowledge', 'summary'].includes(row.kind))
+        if (row.kind === 'changes' && (!target.target_ok || !target.latest_due)) state = 'changed';
+        if (['knowledge', 'summary', 'changes'].includes(row.kind))
           state =
             target.status === 'archived'
               ? 'archived'
               : target.revision !== snapshot.revision
                 ? 'changed'
-                : 'available';
+                : state;
         return { ...base, state, snapshot };
       });
     return {
@@ -123,7 +144,7 @@ export class ReplyEvidence {
       createdAt: header.created_at,
       version: header.version,
       items,
-      note: '这是生成时提供给模型的参考记录，不证明模型实际采用了每一项。知识与摘要展示当时版本；近期上下文只保存消息标识和角色，不额外复制正文。删除的会话原话与摘要不再展示，关闭召回时暂时隐藏。',
+      note: '这是生成时提供给模型的参考记录，不证明模型实际采用了每一项。知识、摘要与变更展示当时版本；近期上下文只保存消息标识和角色，不额外复制正文。删除的会话原话、摘要及失去依据的变更不再展示，关闭召回时暂时隐藏。',
     };
   }
 }

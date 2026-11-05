@@ -44,6 +44,7 @@ import Graph, { kindNames, kindColors } from './Graph';
 import './style.css';
 import Backups from './Backups';
 import Summaries from './Summaries';
+import MemoryChanges from './MemoryChanges';
 
 async function api(path, method = 'GET', data) {
   const res = await fetch(`/api${path}`, {
@@ -508,6 +509,9 @@ function App() {
                 </p>
               </div>
               <div className="heading-actions">
+                <button className="secondary" onClick={() => setModal('changes')}>
+                  记忆变更
+                </button>
                 <button
                   className="secondary"
                   onClick={() => window.open(`/api/spaces/${sid}/export`, '_self')}
@@ -756,6 +760,16 @@ function App() {
           </button>
         </div>
       )}
+      {modal === 'changes' && (
+        <MemoryChanges
+          key={sid}
+          sid={sid}
+          api={api}
+          Modal={Modal}
+          onClose={() => setModal(null)}
+          onChange={reload}
+        />
+      )}
       {modal === 'space' && (
         <Modal title="留一片新的星空" onClose={() => setModal(null)}>
           <form
@@ -906,6 +920,23 @@ function EntryDetail({
         {date(e.updated_at)} · 版本 {e.revision} ·{' '}
         {e.status === 'accepted' ? '已确认' : e.status === 'pending' ? '待确认' : '已归档'}
       </div>
+      {e.currentChange && (
+        <div className="change-warning">
+          <strong>
+            {e.currentChange.kind === 'conflict' ? '这条旧结论仍有冲突' : '这条旧记忆已有变更'}
+          </strong>
+          <p>
+            {e.currentChange.body ||
+              (e.currentChange.state === 'disabled'
+                ? '变更关联会话已关闭召回，暂不沿用旧结论。'
+                : '变更依据已删除，暂不沿用旧结论。请在「记忆变更」中重新核对。')}
+          </p>
+          <small>
+            生效于 {date(e.currentChange.effective_at)} {time(e.currentChange.effective_at)}
+            。下方保留原始版本用于核对。
+          </small>
+        </div>
+      )}
       <div className="markdown">
         <Markdown>{e.body}</Markdown>
       </div>
@@ -1500,7 +1531,7 @@ function Workshop({
           </label>
           <p className="form-note">
             本机检索历史用户原话与已审阅摘要，网页和 MCP
-            共用。关闭后不再召回这些历史片段与摘要；当前会话近期消息和已确认知识仍可用于回答。原话不会自动变成正式知识，摘要需要先审阅。
+            共用。关闭后不再召回这些历史片段、摘要及依赖聊天的变更；当前会话近期消息、已确认知识及仅引用资料的知识变更仍可用于回答。原话不会自动变成正式知识，摘要需要先审阅。
           </p>
           <div className="persona-hints">
             <span>
@@ -1662,8 +1693,8 @@ function ReplyEvidenceView({ sid, sessionId, messageId, onClose, onConversation,
               <p className="form-note">
                 {data.model} · {date(data.createdAt)} {time(data.createdAt)}
               </p>
-              <h3>检索出的知识、原话与摘要 · {recalled.length}</h3>
-              {!recalled.length && <p>本轮没有额外召回知识、历史原话或摘要。</p>}
+              <h3>检索出的知识、原话、摘要与变更 · {recalled.length}</h3>
+              {!recalled.length && <p>本轮没有额外召回知识、历史原话、摘要或变更。</p>}
               {recalled.map((item) => (
                 <blockquote className="memory-excerpt" key={`${item.kind}:${item.ordinal}`}>
                   <small>
@@ -1671,7 +1702,9 @@ function ReplyEvidenceView({ sid, sessionId, messageId, onClose, onConversation,
                       ? '已确认知识'
                       : item.kind === 'summary'
                         ? '已审阅会话摘要'
-                        : '历史用户原话'}
+                        : item.kind === 'changes'
+                          ? '已审阅记忆变更'
+                          : '历史用户原话'}
                     {labels[item.state] ? ` · ${labels[item.state]}` : ''}
                   </small>
                   {item.snapshot &&
@@ -1689,6 +1722,26 @@ function ReplyEvidenceView({ sid, sessionId, messageId, onClose, onConversation,
                               <small> · {source.origin}</small>
                             </p>
                           ))}
+                        </details>
+                      </>
+                    ) : item.kind === 'changes' ? (
+                      <>
+                        <h4>
+                          {item.snapshot.title} ·{' '}
+                          {item.snapshot.kind === 'conflict'
+                            ? '未解决冲突'
+                            : item.snapshot.kind === 'change'
+                              ? '情况变化'
+                              : '纠正'}
+                        </h4>
+                        <p>{item.snapshot.body}</p>
+                        <small>
+                          生效于 {date(item.snapshot.effectiveAt)} {time(item.snapshot.effectiveAt)}{' '}
+                          · 当时版本 {item.snapshot.revision}
+                        </small>
+                        <details>
+                          <summary>当时提供的变更依据</summary>
+                          <p>{item.snapshot.source.quote}</p>
                         </details>
                       </>
                     ) : item.kind === 'summary' ? (
@@ -2224,7 +2277,7 @@ function Chat({ sid, snap, configured, notify, reload, onSettings }) {
         >
           <p>
             将删除「{session?.title}」的消息、聊天索引、会话摘要、摘要任务、MCP
-            绑定及本会话的回答参考记录，并清理其他回答记录引用的这段原话与摘要，无法在界面恢复。其他会话已生成的回答、此前手动收为资料或确认的知识会保留，需另行处理。
+            绑定及本会话的回答参考记录，并清理其他回答记录引用的这段原话与摘要。依赖这段会话的变更会删除或清理正文、停止召回；已确认的限制可能保留，避免重新沿用过期结论。以上无法在界面恢复。其他会话已生成的回答、此前手动收为资料或确认的知识会保留，需另行处理。
           </p>
           <div className="button-row">
             <button className="secondary" disabled={deleting} onClick={() => setDeleteOpen(false)}>

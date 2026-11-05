@@ -7,6 +7,7 @@ import { ConversationMemory } from './conversation-memory.mjs';
 import { WorkspaceViews } from './workspace-views.mjs';
 import { ReplyEvidence } from './reply-evidence.mjs';
 import { ConversationSummaries } from './conversation-summaries.mjs';
+import { MemoryChanges, unsuperseded } from './memory-changes.mjs';
 
 export class Fault extends Error {
   constructor(message, status = 400) {
@@ -61,6 +62,7 @@ export class Store {
     this.conversations = new ConversationMemory(this);
     this.views = new WorkspaceViews(this);
     this.summaries = new ConversationSummaries(this);
+    this.changes = new MemoryChanges(this);
     this.replyEvidence = new ReplyEvidence(this);
   }
   indexEntry(entry) {
@@ -274,14 +276,14 @@ export class Store {
     if (!terms.length) {
       entries = this.db
         .prepare(
-          "SELECT *,0 AS score FROM entries WHERE space_id=? AND status='accepted' ORDER BY updated_at DESC LIMIT ?",
+          `SELECT *,0 AS score FROM entries WHERE space_id=? AND status='accepted' AND ${unsuperseded('knowledge', 'entries.id', 'entries.revision')} ORDER BY updated_at DESC LIMIT ?`,
         )
         .all(spaceId, limit)
         .map(parse);
     } else {
       const rows = this.db
         .prepare(
-          `SELECT t.entry_id,SUM(t.weight) AS score FROM entry_terms t WHERE t.space_id=? AND t.term IN (${terms.map(() => '?').join(',')}) GROUP BY t.entry_id ORDER BY score DESC,t.entry_id LIMIT ?`,
+          `SELECT t.entry_id,SUM(t.weight) AS score FROM entry_terms t JOIN entries e ON e.id=t.entry_id WHERE t.space_id=? AND t.term IN (${terms.map(() => '?').join(',')}) AND ${unsuperseded('knowledge', 'e.id', 'e.revision')} GROUP BY t.entry_id ORDER BY score DESC,t.entry_id LIMIT ?`,
         )
         .all(spaceId, ...terms, limit);
       const read = this.db.prepare(

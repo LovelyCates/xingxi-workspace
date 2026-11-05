@@ -30,6 +30,7 @@ const baseTables = [
 ];
 // Exact, previously shipped schema; never accept a schema supplied only by the manifest.
 const legacySchema = '29172325feaec65cc6a4a7d82740c4f50a5496cc337c31ac1aa3d20096a4eb1f';
+const summarySchema = 'e88c0ef5dc8d7cf2c49d48f9e4e1861b27f3bd38a85d388442c02a63dda91231';
 const summaryTables = [
   'conversation_summaries',
   'summary_messages',
@@ -38,7 +39,9 @@ const summaryTables = [
 ];
 function tablesFor(schema) {
   if (schema === legacySchema) return baseTables;
-  if (schema === expectedSchemaHash()) return [...baseTables, ...summaryTables];
+  if (schema === summarySchema) return [...baseTables, ...summaryTables];
+  if (schema === expectedSchemaHash())
+    return [...baseTables, ...summaryTables, 'memory_changes', 'memory_change_events'];
   throw new Fault('备份数据库结构与此版本不匹配，请使用创建备份的版本恢复');
 }
 const digest = (data) => createHash('sha256').update(data).digest('hex');
@@ -122,6 +125,19 @@ function inspect(path) {
         )
         .get().n;
       if (invalidSummaryIndex || missingSummaryIndex) throw new Fault('摘要索引与原始摘要不一致');
+    }
+    if (schema === expectedSchemaHash()) {
+      const invalid = db
+        .prepare(
+          "SELECT count(*) n FROM memory_change_search f LEFT JOIN memory_changes c ON c.sequence=f.rowid WHERE c.id IS NULL OR c.body='' OR f.scope!='space'||replace(c.space_id,'-','')",
+        )
+        .get().n;
+      const missing = db
+        .prepare(
+          "SELECT count(*) n FROM memory_changes c LEFT JOIN memory_change_search f ON f.rowid=c.sequence WHERE c.body!='' AND f.rowid IS NULL",
+        )
+        .get().n;
+      if (invalid || missing) throw new Fault('变更索引与原始记录不一致');
     }
     return { schema, counts };
   } finally {
@@ -238,7 +254,7 @@ export async function restoreBackup(directory, destination) {
       JSON.stringify(checked.counts) !== JSON.stringify(manifest.counts)
     )
       throw new Fault('恢复副本与备份清单不一致');
-    const migrated = checked.schema === legacySchema;
+    const migrated = checked.schema !== expectedSchemaHash();
     if (migrated) {
       // Only after verifying the copied legacy bytes, run our own additive migration.
       const upgraded = new Store(path);
